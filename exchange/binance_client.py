@@ -5,9 +5,15 @@ from binance import AsyncClient
 
 class BinanceClient:
     def __init__(self):
-        self.client = asyncio.get_event_loop().run_until_complete(
-            AsyncClient.create()
-        )
+        self.client = None  # 初始化為 None
+
+    async def init(self):
+        self.client = await AsyncClient.create()
+
+    async def get_klines(self, symbol, interval="15m", limit=100):
+        if self.client is None:
+            raise Exception("BinanceClient 尚未初始化")
+        ...
 
     async def get_klines(self, symbol, interval="15m", limit=100):
         klines = await self.client.futures_klines(symbol=symbol, interval=interval, limit=limit)

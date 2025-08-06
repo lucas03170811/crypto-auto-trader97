@@ -24,6 +24,6 @@ class HedgeEngine:
                     print(f"🔻 做空訊號 {symbol} | ADX={adx:.2f} RSI={rsi:.2f}")
                     # 下單邏輯
 
-            print("等待 60 秒...")
+print("等待 60 秒...", flush=True)
             
             await asyncio.sleep(60)

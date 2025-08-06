@@ -1,4 +1,3 @@
-import aiohttp
 import pandas as pd
 from binance.um_futures import UMFutures
 import asyncio
@@ -6,11 +5,9 @@ import os
 
 class BinanceClient:
     def __init__(self):
-        self.session = aiohttp.ClientSession()
         self.client = UMFutures(
             key=os.getenv("BINANCE_API_KEY"),
             secret=os.getenv("BINANCE_API_SECRET"),
-            session=self.session,
             base_url="https://testnet.binancefuture.com" if os.getenv("TESTNET") == "1" else "https://fapi.binance.com"
         )
 
@@ -31,4 +28,4 @@ class BinanceClient:
         return df
 
     async def close(self):
-        await self.session.close()
+        pass  # 已不需要 aiohttp session，這邊可留空或刪除

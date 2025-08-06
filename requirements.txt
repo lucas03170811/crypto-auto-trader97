@@ -1,7 +1,7 @@
 pandas==2.2.2
 numpy==1.23.5
-ta-lib-bin==0.4.26
-pandas-ta==0.3.14b0
-binance-futures-connector==4.1.0
-python-dotenv==1.0.1
-aiohttp==3.9.5
+ta-lib-bin==0.4.26        # 預編譯版本（適合 Railway）
+pandas-ta==0.3.14b0       # 技術指標套件
+binance-futures-connector==4.1.0  # 正確 Binance async client
+python-dotenv==1.0.1       # 用於 .env 檔案
+aiohttp==3.9.5             # 適用 async 請求或未來拓展

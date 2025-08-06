@@ -25,5 +25,5 @@ class HedgeEngine:
                     # 下單邏輯
 
             print("等待 60 秒...")
-")
+            
             await asyncio.sleep(60)

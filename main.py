@@ -4,6 +4,7 @@ from exchange.binance_client import BinanceClient
 
 async def main():
     client = BinanceClient()
+    await client.init()
     engine = HedgeEngine(client)
     await engine.run()
 

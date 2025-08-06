@@ -4,11 +4,11 @@ from exchange.binance_client import BinanceClient
 
 async def main():
     client = BinanceClient()
-    await client.init()
-    engine = HedgeEngine(client)
-    await engine.run()
+    try:
+        engine = HedgeEngine(client)
+        await engine.run()
+    finally:
+        await client.close()
 
 if __name__ == "__main__":
     asyncio.run(main())
-finally:
-    await client.close()

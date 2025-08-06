@@ -28,4 +28,5 @@ class BinanceClient:
         return df
 
     async def close(self):
-        pass  # 已不需要 aiohttp session，這邊可留空或刪除
+        # 沒有 aiohttp session，不需要關閉
+        pass

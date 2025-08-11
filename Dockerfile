@@ -14,22 +14,20 @@ RUN apt-get update && apt-get install -y \
 # 升級 pip
 RUN pip install --upgrade pip
 
-# 先複製 requirements.txt，改動會觸發重新安裝套件
+# 安裝依賴
 COPY requirements.txt .
+RUN pip install -r requirements.txt
 
-# 顯示 requirements.txt 並安裝
-RUN echo "======= REQUIREMENTS CONTENT =======" && cat requirements.txt \
-    && pip install --no-cache-dir -r requirements.txt
-
-# 驗證 pandas_ta 是否成功安裝
-RUN python -c "import pandas_ta; print('[CHECK] pandas_ta installed, version:', pandas_ta.__version__)"
+# ✅ 驗證 pandas_ta 是否安裝成功
+RUN python -c "import pandas_ta; print('[CHECK] pandas_ta installed successfully')"
 
 # 複製程式碼
 COPY . .
 
-# 顯示 binance_client.py 內容做 Debug
-RUN echo "======= CHECK binance_client.py CONTENT =======" && cat exchange/binance_client.py
+# 顯示重要檔案，方便除錯
+RUN echo "=== strategy dir ===" && ls -l strategy/ || true
+RUN echo "=== strategies dir ===" && ls -l strategies/ || true
+RUN echo "=== binance_client.py ===" && cat exchange/binance_client.py
 
 ENV PYTHONUNBUFFERED=1
-
 CMD ["python", "main.py"]

@@ -1,41 +1,32 @@
-# strategy/trend.py
+# strategies/trend_signal.py
 import pandas as pd
-import numpy as np
-from typing import Tuple
+import pandas_ta as ta
 
-def ema(series: pd.Series, span: int):
-    return series.ewm(span=span, adjust=False).mean()
+def trend_signal(df: pd.DataFrame) -> bool:
+    """
+    簡化版趨勢策略，放寬成交量 & 技術指標門檻
+    """
+    if df is None or len(df) < 50:
+        return False
+    
+    # 放寬成交量門檻
+    avg_vol = df['volume'].rolling(20).mean().iloc[-1]
+    if avg_vol < 1_000_000:  # 原本可能是 5_000_000
+        return False
 
-def macd(series: pd.Series, fast=12, slow=26, signal=9):
-    fast_ema = ema(series, fast)
-    slow_ema = ema(series, slow)
-    macd_line = fast_ema - slow_ema
-    signal_line = macd_line.ewm(span=signal, adjust=False).mean()
-    return macd_line, signal_line
+    # EMA 趨勢
+    df['ema_fast'] = ta.ema(df['close'], length=9)
+    df['ema_slow'] = ta.ema(df['close'], length=21)
 
-def generate_trend_signal(df) -> Tuple[str | None, str | None]:
-    # df: pandas dataframe with close, high, low
-    if not isinstance(df, pd.DataFrame):
-        return None, None
+    # ADX 判斷趨勢
+    adx = ta.adx(df['high'], df['low'], df['close'], length=14)
+    adx_val = adx['ADX_14'].iloc[-1]
 
-    close = df["close"].astype(float)
+    # RSI
+    rsi = ta.rsi(df['close'], length=14).iloc[-1]
 
-    ema_short = ema(close, 8)
-    ema_long  = ema(close, 21)
-    macd_line, signal_line = macd(close)
-    # simple adx approximation skipped — we'll use macd+ema with low adx threshold
+    # 放寬條件：ADX >= 15 (原本可能 25)，RSI 不在極端區間即可
+    if df['ema_fast'].iloc[-1] > df['ema_slow'].iloc[-1] and adx_val >= 15 and 40 <= rsi <= 60:
+        return True
 
-    try:
-        idx = -1
-        s = ema_short.iloc[idx]
-        l = ema_long.iloc[idx]
-        m = macd_line.iloc[idx]
-        sgn = signal_line.iloc[idx]
-    except Exception:
-        return None, None
-
-    adx_ok = True  # we removed strict ADX to increase trades
-    long_cond = (s > l) and (m > sgn) and adx_ok
-    short_cond = (s < l) and (m < sgn) and adx_ok
-
-    return ("long" if long_cond else None, "short" if short_cond else None)
+    return False

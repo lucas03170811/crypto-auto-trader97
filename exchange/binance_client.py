@@ -1,6 +1,4 @@
-# exchange/binance_client.py
 from binance.um_futures import UMFutures
-import json
 
 print("[DEBUG] 正確版本 binance_client.py 被載入 ✅")
 
@@ -28,29 +26,27 @@ class BinanceClient:
             print(f"[ERROR] Failed to get equity: {e}")
         return 0
 
+    async def get_price(self, symbol):
+        try:
+            ticker = self.client.ticker_price(symbol=symbol)
+            return float(ticker["price"])
+        except Exception as e:
+            print(f"[ERROR] Failed to get price for {symbol}: {e}")
+        return 0
+
     async def open_long(self, symbol, qty):
         try:
-            order = self.client.new_order(
-                symbol=symbol,
-                side="BUY",
-                type="MARKET",
-                quantity=qty
-            )
+            resp = self.client.new_order(symbol=symbol, side="BUY", type="MARKET", quantity=qty)
             print(f"[ORDER] Opened LONG position on {symbol}")
-            print("[ORDER RESPONSE]", json.dumps(order, indent=2))
+            print(f"[ORDER RESPONSE] {resp}")  # ✅ 顯示回傳結果
         except Exception as e:
             print(f"[ERROR] Failed to open LONG on {symbol}: {e}")
 
     async def open_short(self, symbol, qty):
         try:
-            order = self.client.new_order(
-                symbol=symbol,
-                side="SELL",
-                type="MARKET",
-                quantity=qty
-            )
+            resp = self.client.new_order(symbol=symbol, side="SELL", type="MARKET", quantity=qty)
             print(f"[ORDER] Opened SHORT position on {symbol}")
-            print("[ORDER RESPONSE]", json.dumps(order, indent=2))
+            print(f"[ORDER RESPONSE] {resp}")  # ✅ 顯示回傳結果
         except Exception as e:
             print(f"[ERROR] Failed to open SHORT on {symbol}: {e}")
 
@@ -60,11 +56,3 @@ class BinanceClient:
         except Exception as e:
             print(f"[ERROR] Failed to fetch klines for {symbol}: {e}")
             return []
-
-    async def get_price(self, symbol):
-        try:
-            ticker = self.client.ticker_price(symbol=symbol)
-            return float(ticker["price"])
-        except Exception as e:
-            print(f"[ERROR] Failed to fetch price for {symbol}: {e}")
-            return 0

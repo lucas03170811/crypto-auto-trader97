@@ -1,5 +1,4 @@
-import asyncio
-from decimal import Decimal
+# 放寬成交量與資金費率，增加每日交易機率
 from config import FUNDING_RATE_MIN, VOLUME_MIN_USD, SYMBOL_POOL
 
 class SymbolFilter:
@@ -22,6 +21,7 @@ class SymbolFilter:
             if isinstance(res, Exception):
                 continue
             funding, volume = res
-            if funding >= FUNDING_RATE_MIN and volume >= VOLUME_MIN_USD:
+            # 放寬條件
+            if funding >= Decimal("0.0001") and volume >= Decimal("1000000"):
                 approved.append(sym)
-        return approved[:6]
+        return approved[:10]  # 一次取多一點幣種

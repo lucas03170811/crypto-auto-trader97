@@ -1,4 +1,4 @@
-# strategy/revert.py
+# strategies/revert.py
 import pandas as pd
 import numpy as np
 from typing import Tuple

@@ -1,4 +1,4 @@
-# strategy/filter.py
+# strategies/filter.py
 import asyncio
 from decimal import Decimal
 from typing import List, Tuple

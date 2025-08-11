@@ -5,7 +5,7 @@ import config
 print("[DEBUG] MIN_NOTIONAL:", config.MIN_NOTIONAL)
 
 import asyncio
-from strategies.signal_generator import SignalGenerator  # ✅ 確認是 strategy 而不是 strategies
+from strategies.signal_generator import SignalGenerator
 from risk.risk_mgr import RiskManager
 from exchange.binance_client import BinanceClient
 from config import (

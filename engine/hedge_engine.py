@@ -1,33 +1,21 @@
-# engine/hedge_engine.py
 import asyncio
-from strategy.signal_generator import SignalGenerator
+from strategies.trend_signal import trend_signal
 
 class HedgeEngine:
-    def __init__(self, client, risk_mgr):
+    def __init__(self, client):
         self.client = client
-        self.risk_mgr = risk_mgr
-        self.sig = SignalGenerator(client)
 
     async def run(self):
         while True:
             try:
-                print("[Engine] Running scan...")
-                symbols = await self.sig.get_filtered_symbols()
-                print(f"[Engine] Filtered symbols: {symbols}")
+                symbols = ["BTCUSDT", "ETHUSDT", "BNBUSDT", "XRPUSDT", "SOLUSDT"]  # 可自行擴充交易對
+                for symbol in symbols:
+                    df = await self.client.get_klines(symbol, "15m", limit=200)
+                    if df is not None and trend_signal(df):
+                        print(f"[SIGNAL] {symbol} 發現交易信號，準備下單")
+                        await self.client.place_order(symbol, side="BUY", quantity=0.01)  # 測試用數量
 
-                for s in symbols:
-                    signal = await self.sig.generate_signal(s)
-                    if signal:
-                        print(f"[SIGNAL] {s} -> {signal}")
-                        await self.risk_mgr.execute_trade(s, signal)
-                    else:
-                        print(f"[NO SIGNAL] {s} passed filter but no entry signal")
-
-                # print equity
-                equity = await self.client.get_equity()
-                print(f"[Equity] Current equity: {equity:.2f} USDT")
-                await asyncio.sleep(60)
-
+                await asyncio.sleep(60)  # 每 1 分鐘檢查一次
             except Exception as e:
-                print(f"[Engine ERROR] {e}")
-                await asyncio.sleep(60)
+                print(f"執行錯誤: {e}")
+                await asyncio.sleep(5)

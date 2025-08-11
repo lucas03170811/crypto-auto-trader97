@@ -1,29 +1,33 @@
+# engine/hedge_engine.py
 import asyncio
-from strategies.trend_signal import trend_signal
-from strategies.revert_signal import revert_signal
-from filters.symbol_filter import SymbolFilter
+from strategy.signal_generator import SignalGenerator
 
 class HedgeEngine:
-    def __init__(self, client):
+    def __init__(self, client, risk_mgr):
         self.client = client
-        self.filter = SymbolFilter(client)
+        self.risk_mgr = risk_mgr
+        self.sig = SignalGenerator(client)
 
     async def run(self):
         while True:
-            approved = await self.filter.shortlist()
-            print(f"[INFO] 符合條件的幣種: {approved}", flush=True)
+            try:
+                print("[Engine] Running scan...")
+                symbols = await self.sig.get_filtered_symbols()
+                print(f"[Engine] Filtered symbols: {symbols}")
 
-            for symbol in approved:
-                df = await self.client.get_klines(symbol)
-                trend_long, trend_short, adx = trend_signal(df)
-                revert_long, revert_short, rsi, bb_pos = revert_signal(df)
+                for s in symbols:
+                    signal = await self.sig.generate_signal(s)
+                    if signal:
+                        print(f"[SIGNAL] {s} -> {signal}")
+                        await self.risk_mgr.execute_trade(s, signal)
+                    else:
+                        print(f"[NO SIGNAL] {s} passed filter but no entry signal")
 
-                if trend_long or revert_long:
-                    print(f"✅ 做多訊號 {symbol} | ADX={adx:.2f} RSI={rsi:.2f}", flush=True)
-                    # TODO: 實作做多下單邏輯
-                elif trend_short or revert_short:
-                    print(f"🔻 做空訊號 {symbol} | ADX={adx:.2f} RSI={rsi:.2f}", flush=True)
-                    # TODO: 實作做空下單邏輯
+                # print equity
+                equity = await self.client.get_equity()
+                print(f"[Equity] Current equity: {equity:.2f} USDT")
+                await asyncio.sleep(60)
 
-            print("等待 60 秒...", flush=True)
-            await asyncio.sleep(60)
+            except Exception as e:
+                print(f"[Engine ERROR] {e}")
+                await asyncio.sleep(60)

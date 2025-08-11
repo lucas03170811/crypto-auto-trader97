@@ -32,23 +32,25 @@ class BinanceClient:
             return float(ticker["price"])
         except Exception as e:
             print(f"[ERROR] Failed to get price for {symbol}: {e}")
-        return 0
+            return 0
 
     async def open_long(self, symbol, qty):
         try:
             resp = self.client.new_order(symbol=symbol, side="BUY", type="MARKET", quantity=qty)
             print(f"[ORDER] Opened LONG position on {symbol}")
-            print(f"[ORDER RESPONSE] {resp}")  # ✅ 顯示回傳結果
+            return resp
         except Exception as e:
             print(f"[ERROR] Failed to open LONG on {symbol}: {e}")
+            return None
 
     async def open_short(self, symbol, qty):
         try:
             resp = self.client.new_order(symbol=symbol, side="SELL", type="MARKET", quantity=qty)
             print(f"[ORDER] Opened SHORT position on {symbol}")
-            print(f"[ORDER RESPONSE] {resp}")  # ✅ 顯示回傳結果
+            return resp
         except Exception as e:
             print(f"[ERROR] Failed to open SHORT on {symbol}: {e}")
+            return None
 
     async def get_klines(self, symbol, interval="15m", limit=100):
         try:

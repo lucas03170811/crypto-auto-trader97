@@ -1,4 +1,4 @@
-# strategy/signal_generator.py
+# strategies/signal_generator.py
 from .filter import shortlist
 from .trend import generate_trend_signal
 from .revert import generate_revert_signal

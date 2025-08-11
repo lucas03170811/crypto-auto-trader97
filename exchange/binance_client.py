@@ -1,35 +1,70 @@
-import aiohttp
-import pandas as pd
-from datetime import datetime
+# exchange/binance_client.py
+from binance.um_futures import UMFutures
+import json
+
+print("[DEBUG] 正確版本 binance_client.py 被載入 ✅")
 
 class BinanceClient:
-    BASE_URL = "https://api.binance.com/api/v3"
+    def __init__(self, api_key, api_secret):
+        self.client = UMFutures(api_key, api_secret, base_url="https://fapi.binance.com")
 
-    def __init__(self):
-        self.session = aiohttp.ClientSession()
+    async def get_position(self, symbol):
+        try:
+            positions = self.client.get_position_risk(symbol=symbol)
+            for p in positions:
+                if p["symbol"] == symbol:
+                    return float(p["positionAmt"])
+        except Exception as e:
+            print(f"[ERROR] Failed to get position for {symbol}: {e}")
+        return 0
 
-    async def get_klines(self, symbol, interval, limit=200):
-        url = f"{self.BASE_URL}/klines?symbol={symbol}&interval={interval}&limit={limit}"
-        async with self.session.get(url) as resp:
-            if resp.status != 200:
-                return None
-            data = await resp.json()
-            df = pd.DataFrame(data, columns=[
-                "time", "open", "high", "low", "close", "volume",
-                "close_time", "quote_asset_volume", "number_of_trades",
-                "taker_buy_base", "taker_buy_quote", "ignore"
-            ])
-            df["time"] = pd.to_datetime(df["time"], unit="ms")
-            df["open"] = df["open"].astype(float)
-            df["high"] = df["high"].astype(float)
-            df["low"] = df["low"].astype(float)
-            df["close"] = df["close"].astype(float)
-            df["volume"] = df["volume"].astype(float)
-            return df
+    async def get_equity(self):
+        try:
+            balance = self.client.balance()
+            for asset in balance:
+                if asset["asset"] == "USDT":
+                    return float(asset["balance"])
+        except Exception as e:
+            print(f"[ERROR] Failed to get equity: {e}")
+        return 0
 
-    async def place_order(self, symbol, side, quantity):
-        # 測試版本 — 真實下單需加 API Key 與簽名
-        print(f"[ORDER] {side} {quantity} {symbol}")
+    async def open_long(self, symbol, qty):
+        try:
+            order = self.client.new_order(
+                symbol=symbol,
+                side="BUY",
+                type="MARKET",
+                quantity=qty
+            )
+            print(f"[ORDER] Opened LONG position on {symbol}")
+            print("[ORDER RESPONSE]", json.dumps(order, indent=2))
+        except Exception as e:
+            print(f"[ERROR] Failed to open LONG on {symbol}: {e}")
 
-    async def close(self):
-        await self.session.close()
+    async def open_short(self, symbol, qty):
+        try:
+            order = self.client.new_order(
+                symbol=symbol,
+                side="SELL",
+                type="MARKET",
+                quantity=qty
+            )
+            print(f"[ORDER] Opened SHORT position on {symbol}")
+            print("[ORDER RESPONSE]", json.dumps(order, indent=2))
+        except Exception as e:
+            print(f"[ERROR] Failed to open SHORT on {symbol}: {e}")
+
+    async def get_klines(self, symbol, interval="15m", limit=100):
+        try:
+            return self.client.klines(symbol=symbol, interval=interval, limit=limit)
+        except Exception as e:
+            print(f"[ERROR] Failed to fetch klines for {symbol}: {e}")
+            return []
+
+    async def get_price(self, symbol):
+        try:
+            ticker = self.client.ticker_price(symbol=symbol)
+            return float(ticker["price"])
+        except Exception as e:
+            print(f"[ERROR] Failed to fetch price for {symbol}: {e}")
+            return 0

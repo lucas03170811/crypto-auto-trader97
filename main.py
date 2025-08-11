@@ -1,6 +1,11 @@
-import asyncio
+import exchange.binance_client
+print("[DEBUG] binance_client module path:", exchange.binance_client.__file__)
+
 import config
-from strategy.signal_generator import SignalGenerator
+print("[DEBUG] MIN_NOTIONAL:", config.MIN_NOTIONAL)
+
+import asyncio
+from strategy.signal_generator import SignalGenerator  # ✅ 確認是 strategy 而不是 strategies
 from risk.risk_mgr import RiskManager
 from exchange.binance_client import BinanceClient
 from config import (
@@ -8,13 +13,12 @@ from config import (
     BINANCE_API_SECRET,
     SYMBOL_POOL,
     MIN_NOTIONAL,
-    EQUITY_RATIO_PER_TRADE
+    EQUITY_RATIO_PER_TRADE,
 )
 
 async def main():
     print("\n[Engine] Initializing...\n")
 
-    # ✅ 傳入 API 金鑰
     client = BinanceClient(BINANCE_API_KEY, BINANCE_API_SECRET)
     signal_generator = SignalGenerator(client)
     risk_mgr = RiskManager(client, EQUITY_RATIO_PER_TRADE)
@@ -38,9 +42,11 @@ async def main():
                 continue
 
             if signal == "long":
-                await client.open_long(symbol, qty)
+                order_resp = await client.open_long(symbol, qty)
             elif signal == "short":
-                await client.open_short(symbol, qty)
+                order_resp = await client.open_short(symbol, qty)
+
+            print(f"[ORDER RESPONSE] {order_resp}\n")  # ✅ 顯示 Binance API 回傳
         else:
             print(f"[NO SIGNAL] {symbol} passed filter but no entry signal\n")
 

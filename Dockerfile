@@ -25,7 +25,7 @@ RUN python -c "import pandas_ta; print('[CHECK] pandas_ta installed successfully
 COPY . .
 
 # 顯示重要檔案，方便除錯
-RUN echo "=== strategy dir ===" && ls -l strategy/ || true
+RUN echo "=== strategies dir ===" && ls -l strategies/ || true
 RUN echo "=== strategies dir ===" && ls -l strategies/ || true
 RUN echo "=== binance_client.py ===" && cat exchange/binance_client.py
 

@@ -4,16 +4,14 @@ print("[DEBUG] binance_client module path:", exchange.binance_client.__file__)
 import config
 print("[DEBUG] MIN_NOTIONAL:", config.MIN_NOTIONAL)
 
-import os
 import asyncio
-from strategies.signal_generator import SignalGenerator  # ✅ 改成 strategies
+from strategies.signal_generator import SignalGenerator
 from risk.risk_mgr import RiskManager
 from exchange.binance_client import BinanceClient
 from config import (
     BINANCE_API_KEY,
     BINANCE_API_SECRET,
     SYMBOL_POOL,
-    BASE_QTY,
     MIN_NOTIONAL,
     EQUITY_RATIO_PER_TRADE,
 )

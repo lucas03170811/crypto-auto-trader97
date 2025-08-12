@@ -1,4 +1,4 @@
-from .trend import generate_trend_signal
+from .trend import generate_trend_signal  # ✅ 相對匯入
 from .revert import generate_revert_signal
 from .filter import filter_symbols
 

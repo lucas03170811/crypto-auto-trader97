@@ -1,6 +1,6 @@
-from strategies.filter import filter_symbols  # ✅ 改成 strategies
-from strategies.trend import generate_trend_signal  # ✅ 改成 strategies
-from strategies.revert import generate_revert_signal  # ✅ 改成 strategies
+from strategies.trend import generate_trend_signal
+from strategies.revert import generate_revert_signal
+from strategies.filter import filter_symbols
 
 class SignalGenerator:
     def __init__(self, client):

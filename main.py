@@ -1,61 +1,50 @@
-# main.py (debug 起始版 — 覆蓋用，部署後把錯誤貼給我)
-import os, traceback, sys
-print("=== STARTUP DEBUG ===")
-print("CWD:", os.getcwd())
-print("LIST /app:")
-for root, dirs, files in os.walk("/app"):
-    # limit depth to avoid huge logs
-    depth = root.count(os.sep) - 1
-    indent = "  " * depth
-    print(f"{indent}{os.path.basename(root)}/")
-    for f in files:
-        print(f"{indent}  - {f}")
-print("=== END FILE TREE ===\n")
+import os
+import asyncio
+from strategies.signal_generator import SignalGenerator
+from risk.risk_mgr import RiskManager
+from exchange.binance_client import BinanceClient
+from config import (
+    BINANCE_API_KEY,
+    BINANCE_API_SECRET,
+    SYMBOL_POOL,
+    MIN_NOTIONAL,
+    EQUITY_RATIO_PER_TRADE,
+)
 
-# try to import main components and print errors
-try:
-    # show python path
-    print("sys.path:", sys.path)
-    # Try to import the modules we expect
-    import config
-    print("[OK] imported config")
-    from exchange.binance_client import BinanceClient
-    print("[OK] imported exchange.binance_client")
-    # strategies package
-    try:
-        import strategies
-        print("[OK] strategies package found")
-        import strategies.trend as trend_m
-        print("[OK] strategies.trend loaded:", getattr(trend_m, '__file__', 'no-file'))
-    except Exception as e:
-        print("[ERR] loading strategies modules:", e)
-        traceback.print_exc()
-    # risk
-    from risk.risk_mgr import RiskManager
-    print("[OK] imported risk.risk_mgr")
-except Exception as e:
-    print("[IMPORT ERROR] Something failed during imports:")
-    traceback.print_exc()
-
-print("\n>>> Now attempting to run a minimal main loop to exercise startup (no orders).")
-try:
-    # if everything imported try a tiny run
-    from exchange.binance_client import BinanceClient
-    from strategies.signal_generator import SignalGenerator
-    from risk.risk_mgr import RiskManager
-    from config import BINANCE_API_KEY, BINANCE_API_SECRET, SYMBOL_POOL, MIN_NOTIONAL, EQUITY_RATIO_PER_TRADE
+async def main():
+    print("\n[Engine] Initializing...\n")
 
     client = BinanceClient(BINANCE_API_KEY, BINANCE_API_SECRET)
-    print("[DEBUG] BinanceClient created")
-    sg = SignalGenerator(client)
-    print("[DEBUG] SignalGenerator created")
-    rm = RiskManager(client, EQUITY_RATIO_PER_TRADE)
-    print("[DEBUG] RiskManager created")
-    print("Startup smoke test done. Now exiting (no live loop).")
-except Exception as e:
-    print("[RUNTIME ERROR] during minimal run:")
-    traceback.print_exc()
+    signal_generator = SignalGenerator(client)
+    risk_mgr = RiskManager(client, EQUITY_RATIO_PER_TRADE)
 
-# keep the process alive if you want to inspect logs further
-# Commented out: infinite loop not desired on Railway; simply exit.
-print("=== DEBUG MAIN END ===")
+    print("[Engine] Running scan...\n")
+    filtered_symbols = await signal_generator.get_filtered_symbols(SYMBOL_POOL)
+    print(f"[Engine] Filtered symbols: {filtered_symbols}\n")
+
+    for symbol in filtered_symbols:
+        signal = await signal_generator.generate_signal(symbol)
+        pos = await client.get_position(symbol)
+        print(f"[Position] {symbol}: {pos}")
+
+        if signal in ["long", "short"] and pos == 0:
+            print(f"[Trade] Entering {signal.upper()} {symbol}")
+            qty = await risk_mgr.get_order_qty(symbol)
+            notional = await risk_mgr.get_nominal_value(symbol, qty)
+
+            if notional < MIN_NOTIONAL:
+                print(f"[SKIP ORDER] {symbol} 名目價值過低：{notional:.2f} USDT（低於最低限制）\n")
+                continue
+
+            if signal == "long":
+                await client.open_long(symbol, qty)
+            elif signal == "short":
+                await client.open_short(symbol, qty)
+        else:
+            print(f"[NO SIGNAL] {symbol} passed filter but no entry signal\n")
+
+    equity = await client.get_equity()
+    print(f"\n[Equity] Current equity: {equity:.2f} USDT\n")
+
+if __name__ == "__main__":
+    asyncio.run(main())

@@ -1,24 +1,27 @@
-# 使用 Python 基礎映像
 FROM python:3.11-slim
 
-# 設定工作目錄
 WORKDIR /app
 
-# 複製 requirements.txt 並安裝依賴
+# 安裝系統依賴（若需要編譯套件）
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    libffi-dev \
+    libssl-dev \
+    wget \
+    git \
+    && apt-get clean
+
+# 複製 requirements 並安裝
 COPY requirements.txt .
+RUN pip install --upgrade pip
 RUN pip install --no-cache-dir -r requirements.txt
 
-# 複製專案所有檔案
+# 複製程式碼
 COPY . .
 
-# ✅ 在 COPY 之後檢查 /app 目錄結構，並驗證 trend.py 是否存在
-RUN echo "[DEBUG] Listing /app after COPY:" \
-    && ls -R /app \
-    && if [ -f /app/strategies/trend.py ]; then \
-           echo "[DEBUG] trend.py FOUND ✅"; \
-       else \
-           echo "[ERROR] trend.py NOT FOUND ❌" && exit 1; \
-       fi
+# 確認 strategies/trend.py 存在（幫 debug）
+RUN echo "[DEBUG] Listing /app:" && ls -R /app || true \
+ && if [ -f /app/strategies/trend.py ]; then echo "[DEBUG] trend.py FOUND ✅"; else echo "[ERROR] trend.py NOT FOUND ❌" && exit 1; fi
 
-# 設定容器啟動指令
+ENV PYTHONUNBUFFERED=1
 CMD ["python", "main.py"]

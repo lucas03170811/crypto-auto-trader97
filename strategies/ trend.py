@@ -29,7 +29,7 @@ def generate_trend_signal(df: pd.DataFrame) -> str | None:
     if df['ema_fast'].iloc[-1] > df['ema_slow'].iloc[-1] and adx_val >= 15 and 35 <= rsi_val <= 65:
         return "long"
     
-    # Short 條件（可選）
+    # Short 條件
     if df['ema_fast'].iloc[-1] < df['ema_slow'].iloc[-1] and adx_val >= 15 and 35 <= rsi_val <= 65:
         return "short"
 

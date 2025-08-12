@@ -6,71 +6,76 @@ import pandas as pd
 from decimal import Decimal
 from binance.um_futures import UMFutures
 
+"""
+UMFutures is synchronous in binance-futures-connector; we wrap calls using run_in_executor.
+This file provides safe wrappers with fallbacks for different connector versions.
+"""
+
 class BinanceClient:
     def __init__(self, api_key=None, api_secret=None, testnet=False):
         key = api_key or os.getenv("BINANCE_API_KEY")
         secret = api_secret or os.getenv("BINANCE_API_SECRET")
         base = "https://testnet.binancefuture.com" if testnet else "https://fapi.binance.com"
-        # UMFutures is synchronous — we will call it inside run_in_executor
         self.client = UMFutures(key=key, secret=secret, base_url=base)
 
     async def _run(self, fn, *args, **kwargs):
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(None, lambda: fn(*args, **kwargs))
 
-    async def get_klines(self, symbol, interval="15m", limit=100):
+    async def get_klines(self, symbol, interval="15m", limit=200):
         try:
-            res = await self._run(self.client.klines, symbol, interval, limit)
-            # res is list of lists (like Binance)
+            # prefer named args to avoid signature mismatch
+            res = await self._run(self.client.klines, symbol=symbol, interval=interval, limit=limit)
             df = pd.DataFrame(res, columns=[
-                "timestamp", "open", "high", "low", "close", "volume",
-                "close_time", "quote_asset_volume", "num_trades",
-                "taker_buy_base_vol", "taker_buy_quote_vol", "ignore"
+                "timestamp","open","high","low","close","volume",
+                "close_time","quote_asset_volume","num_trades",
+                "taker_buy_base_vol","taker_buy_quote_vol","ignore"
             ])
+            # ensure numeric
             df["close"] = pd.to_numeric(df["close"], errors="coerce")
             df["high"] = pd.to_numeric(df["high"], errors="coerce")
             df["low"] = pd.to_numeric(df["low"], errors="coerce")
             df["volume"] = pd.to_numeric(df["volume"], errors="coerce")
             return df
-        except TypeError as e:
-            # different UMFutures signature — try calling with kwargs
+        except TypeError:
+            # fallback: call with positional if necessary
             try:
-                res = await self._run(self.client.klines, symbol=symbol, interval=interval, limit=limit)
+                res = await self._run(self.client.klines, symbol, interval, limit)
                 df = pd.DataFrame(res)
                 return df
-            except Exception as e2:
-                print(f"[ERROR] Failed to fetch klines for {symbol}: {e2}")
+            except Exception as e:
+                print(f"[ERROR] Failed to fetch klines for {symbol}: {e}")
+                traceback.print_exc()
                 return None
         except Exception as e:
             print(f"[ERROR] Failed to fetch klines for {symbol}: {e}")
+            traceback.print_exc()
             return None
 
     async def get_price(self, symbol):
         try:
             tick = await self._run(self.client.ticker_price, symbol)
-            return float(tick.get("price") if isinstance(tick, dict) else tick)
+            if isinstance(tick, dict):
+                return float(tick.get("price", 0))
+            return float(tick)
         except Exception as e:
             print(f"[ERROR] get_price {symbol}: {e}")
             return 0.0
 
     async def get_position(self, symbol):
         try:
-            # get_position_risk returns list — filter by symbol
-            res = await self._run(self.client.get_position_risk)
+            # many versions: get_position_risk() or get_position_risk(symbol=symbol)
+            try:
+                res = await self._run(self.client.get_position_risk)
+            except TypeError:
+                res = await self._run(self.client.get_position_risk, symbol=symbol)
+
             for p in res:
                 if p.get("symbol") == symbol:
                     return float(p.get("positionAmt", 0))
-        except TypeError:
-            # some versions expect symbol param
-            try:
-                res = await self._run(self.client.get_position_risk, symbol)
-                for p in res:
-                    if p.get("symbol") == symbol:
-                        return float(p.get("positionAmt", 0))
-            except Exception as e:
-                print(f"[ERROR] get_position {symbol}: {e}")
         except Exception as e:
             print(f"[ERROR] get_position {symbol}: {e}")
+            traceback.print_exc()
         return 0.0
 
     async def get_equity(self):
@@ -81,6 +86,7 @@ class BinanceClient:
                     return float(b.get("balance", 0))
         except Exception as e:
             print(f"[ERROR] get_equity: {e}")
+            traceback.print_exc()
         return 0.0
 
     async def open_long(self, symbol, qty, positionSide=None):
@@ -111,4 +117,4 @@ class BinanceClient:
 
     async def close(self):
         # UMFutures has no async close; nothing to do
-        pass
+        return

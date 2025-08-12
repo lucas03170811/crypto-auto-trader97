@@ -1,33 +1,32 @@
 FROM python:3.11-slim
 
+# 設定工作目錄
 WORKDIR /app
 
 # 安裝系統依賴
-RUN apt-get update && apt-get install -y \
-    build-essential \
-    libffi-dev \
-    libssl-dev \
-    wget \
-    git \
-    && apt-get clean
+RUN apt-get update && apt-get install -y gcc g++ make
 
-# 升級 pip
-RUN pip install --upgrade pip
-
-# 安裝依賴
+# 複製需求檔
 COPY requirements.txt .
-RUN pip install -r requirements.txt
 
-# ✅ 驗證 pandas_ta 是否安裝成功
-RUN python -c "import pandas_ta; print('[CHECK] pandas_ta installed successfully')"
+# 安裝 Python 依賴
+RUN pip install --no-cache-dir -r requirements.txt
 
-# 複製程式碼
+# ✅ 部署時檢查 strategies 資料夾與 trend.py 是否存在
+RUN mkdir -p /app/strategies \
+    && echo "[DEBUG] Listing /app after pip install:" \
+    && ls -l /app \
+    && echo "[DEBUG] Listing strategies/:" \
+    && ls -l /app/strategies || true \
+    && if [ -f /app/strategies/trend.py ]; then echo "[DEBUG] trend.py FOUND ✅"; else echo "[ERROR] trend.py NOT FOUND ❌" && exit 1; fi
+
+# 複製專案檔案
 COPY . .
 
-# 顯示重要檔案，方便除錯
-RUN echo "=== strategies dir ===" && ls -l strategies/ || true
-RUN echo "=== strategies dir ===" && ls -l strategies/ || true
-RUN echo "=== binance_client.py ===" && cat exchange/binance_client.py
+# 再次檢查 trend.py 在專案完整複製後是否存在
+RUN echo "[DEBUG] After COPY . :" \
+    && ls -l /app/strategies || true \
+    && if [ -f /app/strategies/trend.py ]; then echo "[DEBUG] trend.py FOUND ✅"; else echo "[ERROR] trend.py NOT FOUND ❌" && exit 1; fi
 
-ENV PYTHONUNBUFFERED=1
+# 啟動應用
 CMD ["python", "main.py"]

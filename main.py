@@ -15,6 +15,11 @@ from config import (
     MIN_NOTIONAL,
     EQUITY_RATIO_PER_TRADE,
 )
+import os
+
+# ✅ 部署時檢查 trend.py 存在
+trend_path = os.path.join(os.path.dirname(__file__), "strategies", "trend.py")
+print(f"[DEBUG] Checking for {trend_path} ... Exists? {os.path.exists(trend_path)}")
 
 async def main():
     print("\n[Engine] Initializing...\n")

@@ -1,31 +1,30 @@
-# strategies/signal_generator.py
-from .filter import shortlist
-from .trend import generate_trend_signal
-from .revert import generate_revert_signal
-
-TIMEFRAMES = ["15m", "5m"]
+from strategies.filter import filter_symbols  # ✅ 改成 strategies
+from strategies.trend import generate_trend_signal  # ✅ 改成 strategies
+from strategies.revert import generate_revert_signal  # ✅ 改成 strategies
 
 class SignalGenerator:
     def __init__(self, client):
         self.client = client
 
-    async def get_filtered_symbols(self):
-        return await shortlist(self.client)
+    async def get_filtered_symbols(self, symbols):
+        return await filter_symbols(self.client)
 
-    async def generate_signal(self, symbol: str):
-        for tf in TIMEFRAMES:
-            df = await self.client.get_klines(symbol, interval=tf, limit=200)
-            if df is None or len(df) < 30:
-                continue
+    async def generate_signal(self, symbol):
+        data = await self.client.get_klines(symbol)
+        if not data or len(data) < 30:
+            print(f"[DATA] {symbol} → insufficient kline data")
+            return None
 
-            t_long, t_short = generate_trend_signal(df)
-            r_long, r_short, rsi_v, bb_pos = generate_revert_signal(df)
+        trend_signal = generate_trend_signal(data)
+        revert_signal = generate_revert_signal(data)
 
-            if t_long or r_long:
-                print(f"[SIGNAL] {symbol} @ {tf} -> LONG (trend:{t_long} revert:{r_long} rsi={rsi_v:.1f} bbpos={bb_pos:.2f})")
-                return "long"
-            if t_short or r_short:
-                print(f"[SIGNAL] {symbol} @ {tf} -> SHORT (trend:{t_short} revert:{r_short} rsi={rsi_v:.1f} bbpos={bb_pos:.2f})")
-                return "short"
+        if trend_signal is not None:
+            print(f"[SIGNAL] {symbol} → trend={trend_signal.upper()} ✅")
+            return trend_signal
 
+        if revert_signal is not None:
+            print(f"[SIGNAL] {symbol} → revert={revert_signal.upper()} ✅")
+            return revert_signal
+
+        print(f"[NO SIGNAL] {symbol} → trend={trend_signal}, revert={revert_signal}")
         return None

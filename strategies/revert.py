@@ -1,4 +1,6 @@
+# strategies/revert.py
 import pandas as pd
+import numpy as np
 from typing import Tuple
 
 def rsi(series: pd.Series, length=14):
@@ -17,11 +19,12 @@ def bbands(series: pd.Series, length=20, std=2.0):
     lower = ma - (sd * std)
     return lower, ma, upper
 
-def generate_revert_signal(df) -> Tuple[str | None, str | None, float, float]:
+def generate_revert_signal(df) -> Tuple[str|None, str|None, float, float]:
     if not isinstance(df, pd.DataFrame):
         return None, None, 0.0, 0.5
 
     close = df["close"].astype(float)
+
     r = rsi(close, 14)
     lower, ma, upper = bbands(close, 20, 2.0)
 
@@ -36,7 +39,6 @@ def generate_revert_signal(df) -> Tuple[str | None, str | None, float, float]:
 
     long_cond = (r_v < 40) and (price < lower_v)
     short_cond = (r_v > 60) and (price > upper_v)
-
     bb_pos = 0.5
     if upper_v != lower_v:
         bb_pos = (price - lower_v) / (upper_v - lower_v)

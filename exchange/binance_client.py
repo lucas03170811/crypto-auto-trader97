@@ -1,120 +1,71 @@
 # exchange/binance_client.py
-import os
 import asyncio
-import traceback
-import pandas as pd
-from decimal import Decimal
+from typing import Any, List
 from binance.um_futures import UMFutures
 
-"""
-UMFutures is synchronous in binance-futures-connector; we wrap calls using run_in_executor.
-This file provides safe wrappers with fallbacks for different connector versions.
-"""
+print("[DEBUG] 正確版本 binance_client.py 被載入 ✅")
 
 class BinanceClient:
-    def __init__(self, api_key=None, api_secret=None, testnet=False):
-        key = api_key or os.getenv("BINANCE_API_KEY")
-        secret = api_secret or os.getenv("BINANCE_API_SECRET")
-        base = "https://testnet.binancefuture.com" if testnet else "https://fapi.binance.com"
-        self.client = UMFutures(key=key, secret=secret, base_url=base)
+    def __init__(self, api_key: str, api_secret: str, base_url: str = "https://fapi.binance.com"):
+        # UMFutures constructor: pass key, secret as positional
+        self.client = UMFutures(api_key, api_secret, base_url=base_url)
 
-    async def _run(self, fn, *args, **kwargs):
-        loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(None, lambda: fn(*args, **kwargs))
+    async def _run_sync(self, fn, *args, **kwargs):
+        """Helper: run blocking sync function in threadpool."""
+        return await asyncio.to_thread(lambda: fn(*args, **kwargs))
 
-    async def get_klines(self, symbol, interval="15m", limit=200):
+    # 抓取 kline（同步 SDK -> 放到 thread）
+    async def get_klines(self, symbol: str, interval: str = "15m", limit: int = 100) -> List[Any]:
         try:
-            # prefer named args to avoid signature mismatch
-            res = await self._run(self.client.klines, symbol=symbol, interval=interval, limit=limit)
-            df = pd.DataFrame(res, columns=[
-                "timestamp","open","high","low","close","volume",
-                "close_time","quote_asset_volume","num_trades",
-                "taker_buy_base_vol","taker_buy_quote_vol","ignore"
-            ])
-            # ensure numeric
-            df["close"] = pd.to_numeric(df["close"], errors="coerce")
-            df["high"] = pd.to_numeric(df["high"], errors="coerce")
-            df["low"] = pd.to_numeric(df["low"], errors="coerce")
-            df["volume"] = pd.to_numeric(df["volume"], errors="coerce")
-            return df
-        except TypeError:
-            # fallback: call with positional if necessary
-            try:
-                res = await self._run(self.client.klines, symbol, interval, limit)
-                df = pd.DataFrame(res)
-                return df
-            except Exception as e:
-                print(f"[ERROR] Failed to fetch klines for {symbol}: {e}")
-                traceback.print_exc()
-                return None
+            return await self._run_sync(self.client.klines, symbol, interval, limit)
         except Exception as e:
             print(f"[ERROR] Failed to fetch klines for {symbol}: {e}")
-            traceback.print_exc()
-            return None
+            return []
 
-    async def get_price(self, symbol):
+    async def get_price(self, symbol: str) -> float:
         try:
-            tick = await self._run(self.client.ticker_price, symbol)
-            if isinstance(tick, dict):
-                return float(tick.get("price", 0))
-            return float(tick)
+            res = await self._run_sync(self.client.ticker_price, symbol)
+            return float(res.get("price", 0.0))
         except Exception as e:
-            print(f"[ERROR] get_price {symbol}: {e}")
+            print(f"[ERROR] Failed to get price for {symbol}: {e}")
             return 0.0
 
-    async def get_position(self, symbol):
+    async def get_position(self, symbol: str) -> float:
         try:
-            # many versions: get_position_risk() or get_position_risk(symbol=symbol)
-            try:
-                res = await self._run(self.client.get_position_risk)
-            except TypeError:
-                res = await self._run(self.client.get_position_risk, symbol=symbol)
-
-            for p in res:
+            pos_list = await self._run_sync(self.client.get_position_risk, symbol)
+            for p in pos_list:
                 if p.get("symbol") == symbol:
-                    return float(p.get("positionAmt", 0))
+                    return float(p.get("positionAmt", 0.0))
         except Exception as e:
-            print(f"[ERROR] get_position {symbol}: {e}")
-            traceback.print_exc()
+            print(f"[ERROR] Failed to get position for {symbol}: {e}")
         return 0.0
 
-    async def get_equity(self):
+    async def get_equity(self) -> float:
         try:
-            bal = await self._run(self.client.balance)
-            for b in bal:
-                if b.get("asset") == "USDT":
-                    return float(b.get("balance", 0))
+            bal = await self._run_sync(self.client.balance)
+            for a in bal:
+                if a.get("asset") == "USDT":
+                    return float(a.get("balance", 0.0))
         except Exception as e:
-            print(f"[ERROR] get_equity: {e}")
-            traceback.print_exc()
+            print(f"[ERROR] Failed to get equity: {e}")
         return 0.0
 
-    async def open_long(self, symbol, qty, positionSide=None):
+    async def open_long(self, symbol: str, qty: float):
         try:
-            params = {"symbol": symbol, "side": "BUY", "type": "MARKET", "quantity": qty}
-            if positionSide:
-                params["positionSide"] = positionSide
-            resp = await self._run(self.client.new_order, **params)
-            print(f"[ORDER] LONG {symbol} qty={qty} resp={resp}")
-            return resp
+            res = await self._run_sync(self.client.new_order,
+                                      symbol=symbol, side="BUY", type="MARKET", quantity=qty)
+            print(f"[ORDER] Opened LONG {symbol} qty={qty} -> {res}")
+            return res
         except Exception as e:
-            print(f"[OPEN LONG ERROR] {symbol}: {e}")
-            traceback.print_exc()
+            print(f"[ERROR] Failed to open LONG {symbol}: {e}")
             return None
 
-    async def open_short(self, symbol, qty, positionSide=None):
+    async def open_short(self, symbol: str, qty: float):
         try:
-            params = {"symbol": symbol, "side": "SELL", "type": "MARKET", "quantity": qty}
-            if positionSide:
-                params["positionSide"] = positionSide
-            resp = await self._run(self.client.new_order, **params)
-            print(f"[ORDER] SHORT {symbol} qty={qty} resp={resp}")
-            return resp
+            res = await self._run_sync(self.client.new_order,
+                                      symbol=symbol, side="SELL", type="MARKET", quantity=qty)
+            print(f"[ORDER] Opened SHORT {symbol} qty={qty} -> {res}")
+            return res
         except Exception as e:
-            print(f"[OPEN SHORT ERROR] {symbol}: {e}")
-            traceback.print_exc()
+            print(f"[ERROR] Failed to open SHORT {symbol}: {e}")
             return None
-
-    async def close(self):
-        # UMFutures has no async close; nothing to do
-        return

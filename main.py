@@ -1,60 +1,45 @@
+# main.py
+import os
+import asyncio
 import exchange.binance_client
 print("[DEBUG] binance_client module path:", exchange.binance_client.__file__)
 
-import config
-print("[DEBUG] MIN_NOTIONAL:", config.MIN_NOTIONAL)
-
-import asyncio
 from strategies.signal_generator import SignalGenerator
 from risk.risk_mgr import RiskManager
 from exchange.binance_client import BinanceClient
-from config import (
-    BINANCE_API_KEY,
-    BINANCE_API_SECRET,
-    SYMBOL_POOL,
-    MIN_NOTIONAL,
-    EQUITY_RATIO_PER_TRADE,
-)
-import os
-
-# ✅ 部署時檢查 trend.py 存在
-trend_path = os.path.join(os.path.dirname(__file__), "strategies", "trend.py")
-print(f"[DEBUG] Checking for {trend_path} ... Exists? {os.path.exists(trend_path)}")
+from config import MIN_NOTIONAL
 
 async def main():
-    print("\n[Engine] Initializing...\n")
+    print("[Engine] Initializing...")
+    client = BinanceClient()
+    sig = SignalGenerator(client)
+    risk = RiskManager(client)
 
-    client = BinanceClient(BINANCE_API_KEY, BINANCE_API_SECRET)
-    signal_generator = SignalGenerator(client)
-    risk_mgr = RiskManager(client, EQUITY_RATIO_PER_TRADE)
+    symbols = await sig.get_filtered_symbols()
+    print("[Engine] Filtered:", symbols)
 
-    print("[Engine] Running scan...\n")
-    filtered_symbols = await signal_generator.get_filtered_symbols(SYMBOL_POOL)
-    print(f"[Engine] Filtered symbols: {filtered_symbols}\n")
-
-    for symbol in filtered_symbols:
-        signal = await signal_generator.generate_signal(symbol)
-        pos = await client.get_position(symbol)
-        print(f"[Position] {symbol}: {pos}")
-
-        if signal in ["long", "short"] and pos == 0:
-            print(f"[Trade] Entering {signal.upper()} {symbol}")
-            qty = await risk_mgr.get_order_qty(symbol)
-            notional = await risk_mgr.get_nominal_value(symbol, qty)
-
-            if notional < MIN_NOTIONAL:
-                print(f"[SKIP ORDER] {symbol} 名目價值過低：{notional:.2f} USDT（低於最低限制）\n")
+    for s in symbols:
+        signal = await sig.generate_signal(s)
+        pos = await client.get_position(s)
+        print(f"[Position] {s}: {pos}")
+        if signal and pos == 0:
+            print(f"[Trade] {s} -> {signal}")
+            qty = await risk.get_order_qty(s)
+            if qty <= 0:
+                print("[SKIP] qty 0")
                 continue
-
+            notional = await risk.get_nominal_value(s, qty)
+            if notional < float(MIN_NOTIONAL):
+                print(f"[SKIP ORDER] {s} 名目價值過低: {notional}")
+                continue
+            # 實際下單（使用 place_market_order）
             if signal == "long":
-                await client.open_long(symbol, qty)
-            elif signal == "short":
-                await client.open_short(symbol, qty)
-        else:
-            print(f"[NO SIGNAL] {symbol} passed filter but no entry signal\n")
+                await client.place_market_order(s, "BUY", qty, positionSide="LONG")
+            else:
+                await client.place_market_order(s, "SELL", qty, positionSide="SHORT")
 
     equity = await client.get_equity()
-    print(f"\n[Equity] Current equity: {equity:.2f} USDT\n")
+    print(f"[Equity] {equity}")
 
 if __name__ == "__main__":
     asyncio.run(main())

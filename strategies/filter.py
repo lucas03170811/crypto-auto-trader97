@@ -1,41 +1,46 @@
 # strategies/filter.py
 import asyncio
 from decimal import Decimal
-from typing import List
-from config import FUNDING_RATE_MIN, VOLUME_MIN_USD, SYMBOL_POOL
+from config import SYMBOL_POOL, VOLUME_MIN_USD, FUNDING_RATE_MIN
 
-async def _fetch(client, symbol: str):
+async def _fetch_metrics(client, symbol):
     try:
-        prem = await client._run_blocking(client.client.futures_premium_index, symbol)
-        fund = Decimal(prem.get("lastFundingRate", "0"))
-        stats = await client._run_blocking(client.client.futures_ticker, symbol)
-        vol = Decimal(stats.get("quoteVolume", "0"))
-        return symbol, fund, vol
+        # premium / funding: try premium_index (some connector versions)
+        try:
+            prem = await client._run(client.client.premium_index, symbol)
+            funding = Decimal(str(prem.get("lastFundingRate", "0")))
+        except Exception:
+            funding = Decimal("0")
+
+        try:
+            stats = await client._run(client.client.ticker_price, symbol)
+            # ticker_price may return dict or str; try quoteVolume fallback via ticker_24hr
+            # Use futures_ticker / ticker_24hr
+            info = await client._run(client.client.ticker_24hr, symbol)
+            volume = Decimal(str(info.get("quoteVolume", "0")))
+        except Exception:
+            volume = Decimal("0")
+
+        return symbol, funding, volume
     except Exception as e:
         print(f"[FILTER] fetch error {symbol}: {e}")
         return symbol, None, None
 
-async def filter_symbols(client, max_candidates: int = 10) -> List[str]:
-    tasks = [ _fetch(client, s) for s in SYMBOL_POOL ]
+async def filter_symbols(client, max_candidates=10):
+    tasks = [_fetch_metrics(client, s) for s in SYMBOL_POOL]
     results = await asyncio.gather(*tasks, return_exceptions=False)
 
     approved = []
-    for symbol, funding, volume in results:
+    for sym, funding, volume in results:
         if funding is None or volume is None:
             continue
         if funding >= FUNDING_RATE_MIN and volume >= VOLUME_MIN_USD:
-            approved.append(symbol)
+            approved.append(sym)
 
     if approved:
         return approved[:max_candidates]
 
-    # 放寬條件 fallback
-    relaxed_volume = VOLUME_MIN_USD / Decimal("3")
-    relaxed_funding = FUNDING_RATE_MIN * Decimal("0.5")
-    fallback = [s for s,fv,vol in results if vol is not None and vol >= relaxed_volume][:max_candidates]
-    if fallback:
-        print("[FILTER] Fallback using relaxed volume.")
-        return fallback
-
-    # 最後回傳 pool 頂部
-    return SYMBOL_POOL[:max_candidates]
+    # 放寬：若沒有通過，選成交量前幾名（fallback）
+    sorted_by_volume = sorted([ (s, v) for s,v,f in results if v is not None ], key=lambda x: x[1], reverse=True)
+    fallback = [s for s,_ in sorted_by_volume[:max_candidates]]
+    return fallback

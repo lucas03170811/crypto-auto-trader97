@@ -1,4 +1,3 @@
-# strategies/signal_generator.py
 from strategies.trend import generate_trend_signal
 from strategies.revert import generate_revert_signal
 from strategies.filter import filter_symbols
@@ -8,7 +7,6 @@ class SignalGenerator:
         self.client = client
 
     async def get_filtered_symbols(self, symbols):
-        # ignore provided symbols param; use filter with client
         return await filter_symbols(self.client)
 
     async def generate_signal(self, symbol):
@@ -17,16 +15,19 @@ class SignalGenerator:
             print(f"[DATA] {symbol} → insufficient kline data")
             return None
 
-        trend = generate_trend_signal(data)
-        revert = generate_revert_signal(data)
+        trend_signal = generate_trend_signal(data)
+        revert_long, revert_short, rsi_val, bb_pos = generate_revert_signal(data)
 
-        # 放寬：只要任一策略回傳方向就採用
-        if trend is not None:
-            print(f"[SIGNAL] {symbol} → trend={trend.upper()} ✅")
-            return trend
-        if revert is not None:
-            print(f"[SIGNAL] {symbol} → revert={revert.upper()} ✅")
-            return revert
+        if trend_signal is not None:
+            print(f"[SIGNAL] {symbol} → trend={trend_signal.upper()} ✅")
+            return trend_signal
 
-        print(f"[NO SIGNAL] {symbol} → trend={trend}, revert={revert}")
+        if revert_long:
+            print(f"[SIGNAL] {symbol} → revert=LONG ✅")
+            return "long"
+        if revert_short:
+            print(f"[SIGNAL] {symbol} → revert=SHORT ✅")
+            return "short"
+
+        print(f"[NO SIGNAL] {symbol} → trend={trend_signal}, revert=({revert_long}, {revert_short})")
         return None

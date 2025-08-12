@@ -7,19 +7,15 @@ class SignalGenerator:
     def __init__(self, client):
         self.client = client
 
-    async def get_filtered_symbols(self):
+    async def get_filtered_symbols(self, pool=None):
         return await filter_symbols(self.client)
 
     async def generate_signal(self, symbol):
         df = await self.client.get_klines(symbol)
-        if df is None or len(df) < 20:
+        if df is None or len(df) < 30:
             return None
-        trend = generate_trend_signal(df)
-        rlong, rshort = generate_revert_signal(df)
-        if trend:
-            return trend
-        if rlong:
-            return "long"
-        if rshort:
-            return "short"
-        return None
+        t = generate_trend_signal(df)
+        if t:
+            return t
+        r = generate_revert_signal(df)
+        return r

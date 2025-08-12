@@ -1,6 +1,6 @@
-from strategies.trend import generate_trend_signal
-from strategies.revert import generate_revert_signal
-from strategies.filter import filter_symbols
+from .trend import generate_trend_signal
+from .revert import generate_revert_signal
+from .filter import filter_symbols
 
 class SignalGenerator:
     def __init__(self, client):
@@ -15,16 +15,16 @@ class SignalGenerator:
             print(f"[DATA] {symbol} → insufficient kline data")
             return None
 
-        trend_signal = generate_trend_signal(data)
-        revert_signal = generate_revert_signal(data)
+        trend_sig = generate_trend_signal(data)
+        revert_sig = generate_revert_signal(data)
 
-        if trend_signal is not None:
-            print(f"[SIGNAL] {symbol} → trend={trend_signal.upper()} ✅")
-            return trend_signal
+        if trend_sig:
+            print(f"[SIGNAL] {symbol} → trend={trend_sig.upper()} ✅")
+            return trend_sig
 
-        if revert_signal is not None:
-            print(f"[SIGNAL] {symbol} → revert={revert_signal.upper()} ✅")
-            return revert_signal
+        if revert_sig:
+            print(f"[SIGNAL] {symbol} → revert={revert_sig.upper()} ✅")
+            return revert_sig
 
-        print(f"[NO SIGNAL] {symbol} → trend={trend_signal}, revert={revert_signal}")
+        print(f"[NO SIGNAL] {symbol} → trend={trend_sig}, revert={revert_sig}")
         return None

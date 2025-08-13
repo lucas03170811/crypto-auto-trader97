@@ -18,10 +18,10 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# 用時間戳記強制跳過 cache（自動生成，不需手動改）
-RUN echo "CACHEBUST value: $(date +%s)"
+# 自動時間戳避免 cache
+RUN echo "CACHEBUST=$(date +%s)"
 
-# 複製全部專案檔案
+# 強制複製專案檔案
 COPY . .
 
 # 檢查 trend.py 是否存在

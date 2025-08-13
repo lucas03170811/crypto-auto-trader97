@@ -1,28 +1,36 @@
 # config.py
-import os
-from decimal import Decimal
 
-BINANCE_API_KEY = os.getenv("BINANCE_API_KEY")
-BINANCE_API_SECRET = os.getenv("BINANCE_API_SECRET")
+# Binance API 設定（記得替換成你自己的 API Key / Secret）
+API_KEY = "YOUR_BINANCE_API_KEY"
+API_SECRET = "YOUR_BINANCE_API_SECRET"
 
-TESTNET = os.getenv("TESTNET", "0") == "1"
+# 預設交易參數
+BASE_QTY = 0.001  # 每筆下單基礎數量
+EQUITY_RATIO = 0.1  # 每次使用資金比例 10%
 
-# 每次下單基礎金額（USDT）
-BASE_QTY_USDT = Decimal(os.getenv("BASE_QTY_USDT", "5"))
-
-# 最低名目價值（USDT） — 與交易所 min_notional 對齊
-MIN_NOTIONAL = Decimal(os.getenv("MIN_NOTIONAL", "5"))
-
-# 放寬的篩選（讓每日更容易有交易）
-VOLUME_MIN_USD = Decimal(os.getenv("VOLUME_MIN_USD", "300000"))  # 放寬至 300k
-FUNDING_RATE_MIN = Decimal(os.getenv("FUNDING_RATE_MIN", "-0.05"))
-
-# 幣種池（可擴張）
+# 交易幣種池
 SYMBOL_POOL = [
     "BTCUSDT","ETHUSDT","SOLUSDT","XRPUSDT","ADAUSDT",
     "DOGEUSDT","LINKUSDT","AVAXUSDT","MATICUSDT",
     "SUIUSDT","SEIUSDT","1000PEPEUSDT","1000BONKUSDT"
 ]
 
-# 每次下單占 equity 比例（risk manager fallback）
-EQUITY_RATIO_PER_TRADE = Decimal(os.getenv("EQUITY_RATIO_PER_TRADE", "0.03"))
+# 篩選條件
+VOLUME_MIN_USD = 300000  # 24h 成交量最低 5,000 萬 USDT
+FUNDING_RATE_MIN = -0.05  # 最低資金費率
+
+# 交易策略參數
+TREND_EMA_FAST = 12
+TREND_EMA_SLOW = 26
+MACD_SIGNAL = 9
+
+REVERT_RSI_OVERBOUGHT = 65
+REVERT_RSI_OVERSOLD = 35
+BOLL_STD_DEV = 2
+
+# K 線設定
+KLINE_INTERVAL = "5m"
+KLINE_LIMIT = 100
+
+# Railway / Docker 執行參數
+DEBUG_MODE = True

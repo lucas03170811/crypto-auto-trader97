@@ -1,12 +1,15 @@
 # config.py
 
-# Binance API 設定（記得替換成你自己的 API Key / Secret）
+# 兩組名稱都提供，避免 ImportError
 API_KEY = "YOUR_BINANCE_API_KEY"
 API_SECRET = "YOUR_BINANCE_API_SECRET"
 
+BINANCE_API_KEY = API_KEY
+BINANCE_API_SECRET = API_SECRET
+
 # 預設交易參數
-BASE_QTY = 0.001  # 每筆下單基礎數量
-EQUITY_RATIO = 0.1  # 每次使用資金比例 10%
+BASE_QTY = 0.001        # 每筆下單基礎數量（僅做下限保護，實際用 EQUITY_RATIO 算）
+EQUITY_RATIO = 0.1      # 每次使用資金比例 10%
 
 # 交易幣種池
 SYMBOL_POOL = [
@@ -15,11 +18,11 @@ SYMBOL_POOL = [
     "SUIUSDT","SEIUSDT","1000PEPEUSDT","1000BONKUSDT"
 ]
 
-# 篩選條件
-VOLUME_MIN_USD = 300000  # 24h 成交量最低 5,000 萬 USDT
-FUNDING_RATE_MIN = -0.05  # 最低資金費率
+# 篩選條件（你說有放寬）
+VOLUME_MIN_USD = 300000    # 24h 成交量下限
+FUNDING_RATE_MIN = -0.05   # 最低資金費率（允許負值）
 
-# 交易策略參數
+# 策略參數
 TREND_EMA_FAST = 12
 TREND_EMA_SLOW = 26
 MACD_SIGNAL = 9
@@ -32,5 +35,5 @@ BOLL_STD_DEV = 2
 KLINE_INTERVAL = "5m"
 KLINE_LIMIT = 100
 
-# Railway / Docker 執行參數
+# 其他
 DEBUG_MODE = True

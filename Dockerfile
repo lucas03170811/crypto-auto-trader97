@@ -18,9 +18,8 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# 用時間戳記強制跳過 cache，確保 COPY . . 每次都更新
-ARG CACHEBUST
-RUN echo "CACHEBUST value: ${CACHEBUST}"
+# 用時間戳記強制跳過 cache（自動生成，不需手動改）
+RUN echo "CACHEBUST value: $(date +%s)"
 
 # 複製全部專案檔案
 COPY . .

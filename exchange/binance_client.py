@@ -12,7 +12,6 @@ class BinanceClient:
     async def _run_sync(self, fn, *args, **kwargs):
         return await asyncio.to_thread(lambda: fn(*args, **kwargs))
 
-    # Kline
     async def get_klines(self, symbol: str, interval: str = "15m", limit: int = 100) -> List[Any]:
         try:
             return await self._run_sync(self.client.klines, symbol=symbol, interval=interval, limit=limit)
@@ -20,7 +19,6 @@ class BinanceClient:
             print(f"[ERROR] Failed to fetch klines for {symbol}: {e}")
             return []
 
-    # 現價
     async def get_price(self, symbol: str) -> float:
         try:
             res = await self._run_sync(self.client.ticker_price, symbol=symbol)
@@ -29,15 +27,14 @@ class BinanceClient:
             print(f"[ERROR] Failed to get price for {symbol}: {e}")
             return 0.0
 
-    # 24h 資訊（拿 quoteVolume）
     async def get_24h_stats(self, symbol: str) -> Optional[dict]:
+        """新版 SDK 用 ticker_24hr_price_change"""
         try:
-            return await self._run_sync(self.client.ticker_24hr, symbol=symbol)
+            return await self._run_sync(self.client.ticker_24hr_price_change, symbol=symbol)
         except Exception as e:
             print(f"[ERROR] Failed to get 24h stats for {symbol}: {e}")
             return None
 
-    # 最新 funding rate（拿最後一筆）
     async def get_latest_funding_rate(self, symbol: str) -> Optional[float]:
         try:
             data = await self._run_sync(self.client.funding_rate, symbol=symbol, limit=1)
@@ -45,6 +42,17 @@ class BinanceClient:
                 return float(data[0].get("fundingRate", 0.0))
         except Exception as e:
             print(f"[ERROR] Failed to get funding rate for {symbol}: {e}")
+        return None
+
+    async def get_symbol_info(self, symbol: str) -> Optional[dict]:
+        try:
+            data = await self._run_sync(self.client.exchange_info)
+            if isinstance(data, dict) and "symbols" in data:
+                for s in data["symbols"]:
+                    if s["symbol"] == symbol:
+                        return s
+        except Exception as e:
+            print(f"[ERROR] Failed to get symbol info for {symbol}: {e}")
         return None
 
     async def get_position(self, symbol: str) -> float:

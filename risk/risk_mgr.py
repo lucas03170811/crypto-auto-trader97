@@ -1,6 +1,5 @@
 # risk/risk_mgr.py
 from decimal import Decimal, ROUND_DOWN, getcontext
-
 getcontext().prec = 18
 
 class RiskManager:
@@ -10,10 +9,25 @@ class RiskManager:
 
     async def get_order_qty(self, symbol: str, min_qty: float = 0.0) -> float:
         equity = await self.client.get_equity()
-        price  = await self.client.get_price(symbol)
+        price = await self.client.get_price(symbol)
         if price <= 0:
             return 0.0
+
         usdt_amount = Decimal(str(equity)) * self.equity_ratio
-        qty = (usdt_amount / Decimal(str(price))).quantize(Decimal("0.0001"), rounding=ROUND_DOWN)
-        qf = float(qty)
-        return qf if qf >= min_qty else 0.0
+        raw_qty = usdt_amount / Decimal(str(price))
+
+        # 取得交易對的最小單位 (stepSize)
+        info = await self.client.get_symbol_info(symbol)
+        step_size = Decimal("0.0001")  # default
+        if info and "filters" in info:
+            for f in info["filters"]:
+                if f["filterType"] == "LOT_SIZE":
+                    step_size = Decimal(f["stepSize"])
+                    break
+
+        # 截斷到允許的最大小數位
+        precision = abs(step_size.as_tuple().exponent)
+        qty = raw_qty.quantize(Decimal(f"1.{'0'*precision}"), rounding=ROUND_DOWN)
+
+        qty_f = float(qty)
+        return qty_f if qty_f >= min_qty else 0.0

@@ -1,22 +1,19 @@
 # strategies/revert.py
 import pandas as pd
-import ta
-from config import REVERT_RSI_OVERBOUGHT, REVERT_RSI_OVERSOLD, BOLL_STD_DEV
+import talib
 
+# 反轉策略（RSI + BOLL）
 def generate_revert_signal(df: pd.DataFrame):
-    rsi = ta.momentum.RSIIndicator(df['close'], window=14)
-    df['rsi'] = rsi.rsi()
+    close = df['close'].values
 
-    boll = ta.volatility.BollingerBands(df['close'], window=20, window_dev=BOLL_STD_DEV)
-    df['boll_high'] = boll.bollinger_hband()
-    df['boll_low'] = boll.bollinger_lband()
+    rsi = talib.RSI(close, timeperiod=14)
+    upper, middle, lower = talib.BBANDS(close, timeperiod=20, nbdevup=2, nbdevdn=2)
 
-    last = df.iloc[-1]
-
-    # 放寬條件：RSI 觸及極值區 + 收盤價在布林帶外
-    if last['rsi'] > REVERT_RSI_OVERBOUGHT and last['close'] > last['boll_high']:
+    # 放寬條件
+    # 原本 RSI > 70 超買 / < 30 超賣
+    # 現在 RSI > 65 超買 / < 35 超賣
+    if rsi[-1] > 65 and close[-1] > upper[-1]:
         return "SHORT"
-    elif last['rsi'] < REVERT_RSI_OVERSOLD and last['close'] < last['boll_low']:
+    elif rsi[-1] < 35 and close[-1] < lower[-1]:
         return "LONG"
-
     return None

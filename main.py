@@ -1,111 +1,117 @@
 # main.py
-import os
 import asyncio
-from statistics import mean
+import pandas as pd
 from config import (
-    BINANCE_API_KEY, BINANCE_API_SECRET,
-    API_KEY, API_SECRET,
-    BASE_QTY, EQUITY_RATIO,
-    KLINE_INTERVAL, KLINE_LIMIT,
-    TREND_EMA_FAST, TREND_EMA_SLOW, MACD_SIGNAL,
-    DEBUG_MODE
+    API_KEY, API_SECRET, SYMBOL_POOL, BASE_QTY, EQUITY_RATIO,
+    KLINE_INTERVAL, KLINE_LIMIT, DEBUG_MODE
 )
 from exchange.binance_client import BinanceClient
-from filters.symbol_filter import shortlist
 from risk.risk_mgr import RiskManager
+from strategies.trend import generate_trend_signal, should_pyramid
+from strategies.revert import generate_revert_signal
 
-def ema(values, length):
-    if not values or len(values) < length:
-        return None
-    k = 2 / (length + 1)
-    ema_val = mean(values[:length])
-    for v in values[length:]:
-        ema_val = v * k + ema_val * (1 - k)
-    return ema_val
-
-async def gen_trend_signal(closes):
-    """簡單 EMA 快慢線 + MACD signal 判斷"""
-    if len(closes) < max(TREND_EMA_SLOW + MACD_SIGNAL, 35):
-        return None
-
-    fast = ema(closes, TREND_EMA_FAST)
-    slow = ema(closes, TREND_EMA_SLOW)
-    if fast is None or slow is None:
-        return None
-
-    macd_line = fast - slow
-
-    # 粗略做個 signal 線（MACD_LINE 的 EMA）
-    # 取最近 TREND_EMA_SLOW 根的 macd 值來算 signal
-    macd_series = []
-    # 建一組 macd 序列（簡化：以移動窗計算）
-    for i in range(TREND_EMA_SLOW, len(closes)):
-        sub_fast = ema(closes[:i], TREND_EMA_FAST)
-        sub_slow = ema(closes[:i], TREND_EMA_SLOW)
-        if sub_fast is None or sub_slow is None:
-            macd_series.append(0.0)
-        else:
-            macd_series.append(sub_fast - sub_slow)
-
-    sig = ema(macd_series, MACD_SIGNAL) if len(macd_series) >= MACD_SIGNAL else None
-    if sig is None:
-        return None
-
-    if macd_line > sig and fast > slow:
-        return "LONG"
-    if macd_line < sig and fast < slow:
-        return "SHORT"
-    return None
-
-async def get_closes(client, symbol):
-    kl = await client.get_klines(symbol, interval=KLINE_INTERVAL, limit=KLINE_LIMIT)
-    if not kl:
-        return []
-    # UMFutures.klines 回傳：[openTime, open, high, low, close, volume, ...]
-    closes = [ float(k[4]) for k in kl if len(k) > 4 ]
-    return closes
+# 全局紀錄持倉最高價 / 最低價，用來計算移動停損
+trade_tracker = {}
 
 async def main():
-    # 取金鑰：ENV 優先，其次 config 兩種名稱都可
-    key = os.getenv("BINANCE_API_KEY") or os.getenv("API_KEY") or BINANCE_API_KEY or API_KEY
-    sec = os.getenv("BINANCE_API_SECRET") or os.getenv("API_SECRET") or BINANCE_API_SECRET or API_SECRET
-
-    if not key or not sec:
-        print("[FATAL] API key/secret not set. Set env or config.py.")
-        return
-
-    client = BinanceClient(key, sec)
+    client = BinanceClient(API_KEY, API_SECRET)
     rm = RiskManager(client, EQUITY_RATIO)
 
     print("[BOOT] Starting scanner...")
-    symbols = await shortlist(client, max_candidates=6)
-    print(f"[SCAN] shortlisted: {symbols}")
 
-    for sym in symbols:
-        closes = await get_closes(client, sym)
-        if len(closes) < 30:
-            print(f"[SKIP] not enough data: {sym}")
-            continue
+    while True:
+        shortlisted = SYMBOL_POOL
+        print(f"[SCAN] shortlisted: {shortlisted}")
 
-        sig = await gen_trend_signal(closes)
-        if not sig:
-            print(f"[NO SIGNAL] {sym}")
-            continue
+        for sym in shortlisted:
+            klines = await client.get_klines(sym, interval=KLINE_INTERVAL, limit=KLINE_LIMIT)
+            if not klines:
+                continue
 
-        qty = await rm.get_order_qty(sym, min_qty=BASE_QTY)
-        if qty <= 0:
-            print(f"[RISK] qty too small: {sym}")
-            continue
+            df = pd.DataFrame(klines, columns=[
+                "timestamp", "open", "high", "low", "close", "volume", "_", "__", "___", "____", "_____", "______"
+            ])
+            df = df.astype({"open": float, "high": float, "low": float, "close": float, "volume": float})
 
-        if sig == "LONG":
-            await client.open_long(sym, qty)
-        elif sig == "SHORT":
-            await client.open_short(sym, qty)
+            trend_signal = generate_trend_signal(df)
+            revert_signal = generate_revert_signal(df)
+            signal = trend_signal or revert_signal
 
-        await asyncio.sleep(0.5)  # 避免打太快
+            pos = await client.get_position(sym)
+            price = await client.get_price(sym)
+
+            # ===== 有持倉時，檢查風控 =====
+            if pos != 0:
+                entry_price = trade_tracker.get(sym, {}).get("entry_price", price)
+                direction = "LONG" if pos > 0 else "SHORT"
+
+                # 更新最高/最低價
+                if direction == "LONG":
+                    trade_tracker[sym]["peak_price"] = max(trade_tracker[sym]["peak_price"], price)
+                else:
+                    trade_tracker[sym]["peak_price"] = min(trade_tracker[sym]["peak_price"], price)
+
+                # 移動停損 - 回吐 15% 停利
+                peak = trade_tracker[sym]["peak_price"]
+                if direction == "LONG":
+                    if price <= peak * 0.85:
+                        await client.open_short(sym, abs(pos))  # 平倉
+                        print(f"[TRAIL STOP] {sym} LONG exited at {price} (from peak {peak})")
+                        trade_tracker.pop(sym, None)
+                        continue
+                else:  # SHORT
+                    if price >= peak * 1.15:
+                        await client.open_long(sym, abs(pos))  # 平倉
+                        print(f"[TRAIL STOP] {sym} SHORT exited at {price} (from trough {peak})")
+                        trade_tracker.pop(sym, None)
+                        continue
+
+                # 固定止損 - 虧損達 30%
+                if direction == "LONG":
+                    if price <= entry_price * 0.7:
+                        await client.open_short(sym, abs(pos))
+                        print(f"[STOP LOSS] {sym} LONG stopped at {price}")
+                        trade_tracker.pop(sym, None)
+                        continue
+                else:
+                    if price >= entry_price * 1.3:
+                        await client.open_long(sym, abs(pos))
+                        print(f"[STOP LOSS] {sym} SHORT stopped at {price}")
+                        trade_tracker.pop(sym, None)
+                        continue
+
+                # 單邊趨勢加碼
+                if should_pyramid(df, direction):
+                    qty = await rm.get_order_qty(sym)
+                    if qty > 0:
+                        if direction == "LONG":
+                            await client.open_long(sym, qty)
+                        else:
+                            await client.open_short(sym, qty)
+                        print(f"[PYRAMID] Added position on {sym}, direction={direction}, qty={qty}")
+                continue  # 已有持倉則不開新反向
+
+            # ===== 無持倉時，開倉 =====
+            if signal:
+                qty = await rm.get_order_qty(sym, min_qty=BASE_QTY)
+                if qty <= 0:
+                    print(f"[RISK] qty too small: {sym}")
+                    continue
+
+                if signal == "LONG":
+                    await client.open_long(sym, qty)
+                    trade_tracker[sym] = {
+                        "entry_price": price,
+                        "peak_price": price
+                    }
+                elif signal == "SHORT":
+                    await client.open_short(sym, qty)
+                    trade_tracker[sym] = {
+                        "entry_price": price,
+                        "peak_price": price
+                    }
+
+        await asyncio.sleep(60)  # 每分鐘掃描
 
 if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        pass
+    asyncio.run(main())

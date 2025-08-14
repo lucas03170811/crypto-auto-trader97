@@ -28,7 +28,6 @@ class BinanceClient:
             return 0.0
 
     async def get_24h_stats(self, symbol: str) -> Optional[dict]:
-        """新版 SDK 用 ticker_24hr_price_change"""
         try:
             return await self._run_sync(self.client.ticker_24hr_price_change, symbol=symbol)
         except Exception as e:
@@ -49,7 +48,7 @@ class BinanceClient:
             data = await self._run_sync(self.client.exchange_info)
             if isinstance(data, dict) and "symbols" in data:
                 for s in data["symbols"]:
-                    if s["symbol"] == symbol:
+                    if s.get("symbol") == symbol:
                         return s
         except Exception as e:
             print(f"[ERROR] Failed to get symbol info for {symbol}: {e}")
@@ -77,8 +76,10 @@ class BinanceClient:
 
     async def open_long(self, symbol: str, qty: float):
         try:
-            res = await self._run_sync(self.client.new_order,
-                                       symbol=symbol, side="BUY", type="MARKET", quantity=qty)
+            res = await self._run_sync(
+                self.client.new_order,
+                symbol=symbol, side="BUY", type="MARKET", quantity=qty
+            )
             print(f"[ORDER] Opened LONG {symbol} qty={qty} -> {res}")
             return res
         except Exception as e:
@@ -87,10 +88,37 @@ class BinanceClient:
 
     async def open_short(self, symbol: str, qty: float):
         try:
-            res = await self._run_sync(self.client.new_order,
-                                       symbol=symbol, side="SELL", type="MARKET", quantity=qty)
+            res = await self._run_sync(
+                self.client.new_order,
+                symbol=symbol, side="SELL", type="MARKET", quantity=qty
+            )
             print(f"[ORDER] Opened SHORT {symbol} qty={qty} -> {res}")
             return res
         except Exception as e:
             print(f"[ERROR] Failed to open SHORT {symbol}: {e}")
+            return None
+
+    async def close_position(self, symbol: str):
+        """
+        使用 reduceOnly 市價單關閉整個倉位（避免反手）。
+        """
+        try:
+            amt = await self.get_position(symbol)
+            if amt == 0:
+                print(f"[CLOSE] {symbol} no position to close.")
+                return None
+            side = "SELL" if amt > 0 else "BUY"
+            qty = abs(amt)
+            res = await self._run_sync(
+                self.client.new_order,
+                symbol=symbol,
+                side=side,
+                type="MARKET",
+                quantity=qty,
+                reduceOnly=True
+            )
+            print(f"[CLOSE] {symbol} reduceOnly {side} qty={qty} -> {res}")
+            return res
+        except Exception as e:
+            print(f"[ERROR] Failed to close position for {symbol}: {e}")
             return None

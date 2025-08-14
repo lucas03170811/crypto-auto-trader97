@@ -14,7 +14,7 @@ RUN wget http://prdownloads.sourceforge.net/ta-lib/ta-lib-0.4.0-src.tar.gz \
     && cd ta-lib && ./configure --prefix=/usr && make && make install \
     && cd .. && rm -rf ta-lib ta-lib-0.4.0-src.tar.gz
 
-# 更新 pip 並安裝 Python 套件
+# 更新 pip
 RUN pip install --upgrade pip
 
 # 設定工作目錄

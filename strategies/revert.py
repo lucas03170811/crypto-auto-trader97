@@ -1,18 +1,16 @@
 # strategies/revert.py
+import pandas as pd
 import talib
-import numpy as np
 from config import REVERT_RSI_OVERBOUGHT, REVERT_RSI_OVERSOLD, BOLL_STD_DEV
 
-async def generate_revert_signal(client, symbol):
-    """放寬條件的反轉策略"""
-    klines = await client.get_klines(symbol)
-    closes = np.array([float(k[4]) for k in klines])
+def generate_revert_signal(df: pd.DataFrame):
+    """產生反轉交易信號"""
+    rsi = talib.RSI(df['close'], timeperiod=14)
+    upper, middle, lower = talib.BBANDS(df['close'], nbdevup=BOLL_STD_DEV, nbdevdn=BOLL_STD_DEV, timeperiod=20)
 
-    rsi = talib.RSI(closes, timeperiod=14)
-    upper, middle, lower = talib.BBANDS(closes, nbdevup=BOLL_STD_DEV, nbdevdn=BOLL_STD_DEV, timeperiod=20)
-
-    if rsi[-1] > REVERT_RSI_OVERBOUGHT and closes[-1] >= upper[-1]:
-        return {"side": "SHORT"}
-    elif rsi[-1] < REVERT_RSI_OVERSOLD and closes[-1] <= lower[-1]:
-        return {"side": "LONG"}
-    return None
+    if rsi.iloc[-1] > REVERT_RSI_OVERBOUGHT and df['close'].iloc[-1] > upper.iloc[-1]:
+        return "SHORT"
+    elif rsi.iloc[-1] < REVERT_RSI_OVERSOLD and df['close'].iloc[-1] < lower.iloc[-1]:
+        return "LONG"
+    else:
+        return None

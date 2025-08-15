@@ -4,9 +4,13 @@ import sys
 
 print("===== [CONFIG DEBUG] 載入設定檔 =====")
 
-# Binance API Key & Secret 從 Railway 環境變數讀取
-API_KEY = os.getenv("BINANCE_API_KEY", "").strip()
-API_SECRET = os.getenv("BINANCE_API_SECRET", "").strip()
+try:
+    API_KEY = os.getenv("BINANCE_API_KEY", "").strip()
+    API_SECRET = os.getenv("BINANCE_API_SECRET", "").strip()
+except Exception as e:
+    print("[ERROR] 無法讀取環境變數:", e)
+    API_KEY = ""
+    API_SECRET = ""
 
 print(f"API_KEY: {'✅ 已讀取' if API_KEY else '❌ 未讀取'}")
 print(f"API_SECRET: {'✅ 已讀取' if API_SECRET else '❌ 未讀取'}")

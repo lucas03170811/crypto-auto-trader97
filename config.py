@@ -10,8 +10,8 @@ if not API_KEY or not API_SECRET:
     )
 
 # 預設交易參數
-BASE_QTY = 0.001  # 每筆下單基礎數量
-EQUITY_RATIO = 0.1  # 每次使用資金比例 10%
+BASE_QTY = 0.001      # 每筆下單基礎數量
+EQUITY_RATIO = 0.1    # 每次使用資金比例 10%
 
 # 交易幣種池
 SYMBOL_POOL = [
@@ -36,6 +36,12 @@ BOLL_STD_DEV = 2
 # K 線設定
 KLINE_INTERVAL = "5m"
 KLINE_LIMIT = 100
+
+# 風控參數（新增）
+TRAILING_STOP_PCT = 0.15   # 移動停損，獲利回調 15% 停利
+MAX_LOSS_PCT = 0.3         # 固定止損，虧損 30% 強制平倉
+PYRAMID_PROFIT_PCT = 0.3   # 單邊獲利 30% 加碼
+PYRAMID_MAX_LAYERS = 3     # 最大加碼層數
 
 # Railway / Docker 執行參數
 DEBUG_MODE = True

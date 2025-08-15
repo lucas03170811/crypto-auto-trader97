@@ -1,32 +1,21 @@
 # strategies/trend.py
+import pandas as pd
 import talib
-import numpy as np
 from config import TREND_EMA_FAST, TREND_EMA_SLOW, MACD_SIGNAL
 
-async def generate_trend_signal(client, symbol):
-    """放寬條件的趨勢判斷"""
-    klines = await client.get_klines(symbol)
-    closes = np.array([float(k[4]) for k in klines])
+def generate_trend_signal(df: pd.DataFrame):
+    """產生趨勢交易信號"""
+    df['ema_fast'] = talib.EMA(df['close'], timeperiod=TREND_EMA_FAST)
+    df['ema_slow'] = talib.EMA(df['close'], timeperiod=TREND_EMA_SLOW)
+    macd, macd_signal, _ = talib.MACD(df['close'], fastperiod=TREND_EMA_FAST, slowperiod=TREND_EMA_SLOW, signalperiod=MACD_SIGNAL)
 
-    ema_fast = talib.EMA(closes, timeperiod=TREND_EMA_FAST)
-    ema_slow = talib.EMA(closes, timeperiod=TREND_EMA_SLOW)
-    macd, macdsignal, _ = talib.MACD(closes, fastperiod=TREND_EMA_FAST, slowperiod=TREND_EMA_SLOW, signalperiod=MACD_SIGNAL)
+    if df['ema_fast'].iloc[-1] > df['ema_slow'].iloc[-1] and macd.iloc[-1] > macd_signal.iloc[-1]:
+        return "LONG"
+    elif df['ema_fast'].iloc[-1] < df['ema_slow'].iloc[-1] and macd.iloc[-1] < macd_signal.iloc[-1]:
+        return "SHORT"
+    else:
+        return None
 
-    if ema_fast[-1] > ema_slow[-1] and macd[-1] > macdsignal[-1]:
-        return {"side": "LONG"}
-    elif ema_fast[-1] < ema_slow[-1] and macd[-1] < macdsignal[-1]:
-        return {"side": "SHORT"}
-    return None
-
-async def should_pyramid(client, symbol, side):
-    """判斷是否繼續加碼（單邊趨勢）"""
-    position = await client.get_position(symbol)
-    if not position or float(position["positionAmt"]) == 0:
-        return False
-
-    entry_price = float(position["entryPrice"])
-    mark_price = float(await client.get_price(symbol))
-
-    profit_pct = (mark_price - entry_price) / entry_price if side == "LONG" else (entry_price - mark_price) / entry_price
-
-    return profit_pct >= 0.03  # 獲利達 3% 觸發加碼
+def should_pyramid(df: pd.DataFrame, position_side: str):
+    """判斷是否加碼（滾倉）"""
+    return generate_trend_signal(df) == position_side

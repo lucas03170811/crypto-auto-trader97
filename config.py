@@ -5,8 +5,8 @@ import sys
 print("===== [CONFIG DEBUG] 載入設定檔 =====")
 
 # Binance API Key & Secret 從環境變數讀取
-BINANCE_API_KEY = os.getenv("API_KEY")
-BINANCE_API_SECRET = os.getenv("API_SECRET")
+BINANCE_API_KEY = os.getenv("BINANCE_API_KEY")
+BINANCE_API_SECRET = os.getenv("BINANCE_API_SECRET")
 
 if not API_KEY or not API_SECRET:
     print("[ERROR] 環境變數 API_KEY 或 API_SECRET 未設定，請到 Railway 設定 Environment Variables")

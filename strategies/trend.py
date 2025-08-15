@@ -1,38 +1,31 @@
 # strategies/trend.py
-import pandas as pd
 import talib
+import numpy as np
+from config import TREND_EMA_FAST, TREND_EMA_SLOW, MACD_SIGNAL
 
-# 單邊趨勢判斷（EMA + MACD）
-def generate_trend_signal(df: pd.DataFrame):
-    close = df['close'].values
+async def generate_trend_signal(client, symbol):
+    klines = await client.get_klines(symbol)
+    closes = np.array([float(k[4]) for k in klines])
 
-    ema_fast = talib.EMA(close, timeperiod=12)
-    ema_slow = talib.EMA(close, timeperiod=26)
+    ema_fast = talib.EMA(closes, timeperiod=TREND_EMA_FAST)
+    ema_slow = talib.EMA(closes, timeperiod=TREND_EMA_SLOW)
+    macd, macdsignal, _ = talib.MACD(closes, fastperiod=TREND_EMA_FAST, slowperiod=TREND_EMA_SLOW, signalperiod=MACD_SIGNAL)
 
-    macd, signal, hist = talib.MACD(close, fastperiod=12, slowperiod=26, signalperiod=9)
-
-    # 放寬進場條件
-    # 原本要明顯的 EMA 排列才進場，現在只要差距大於 0.05% 就進
-    if ema_fast[-1] > ema_slow[-1] * 1.0005 and macd[-1] > signal[-1]:
-        return "LONG"
-    elif ema_fast[-1] < ema_slow[-1] * 0.9995 and macd[-1] < signal[-1]:
-        return "SHORT"
+    if ema_fast[-1] > ema_slow[-1] and macd[-1] > macdsignal[-1]:
+        return {"side": "LONG"}
+    elif ema_fast[-1] < ema_slow[-1] and macd[-1] < macdsignal[-1]:
+        return {"side": "SHORT"}
     return None
 
-# 單邊加碼判斷
-def should_pyramid(df: pd.DataFrame, direction: str):
-    """
-    判斷是否應該在單邊行情中加碼
-    條件：
-    1. 方向一致（LONG → EMA 快線 > 慢線；SHORT → EMA 快線 < 慢線）
-    2. 價格比上一筆加碼時高（LONG）或低（SHORT）
-    """
-    close = df['close'].values
-    ema_fast = talib.EMA(close, timeperiod=12)
-    ema_slow = talib.EMA(close, timeperiod=26)
+async def should_pyramid(client, symbol, side):
+    """判斷是否繼續加碼（單邊趨勢）"""
+    position = await client.get_position(symbol)
+    if not position or float(position["positionAmt"]) == 0:
+        return False
 
-    if direction == "LONG":
-        return ema_fast[-1] > ema_slow[-1] and close[-1] > close[-3]
-    elif direction == "SHORT":
-        return ema_fast[-1] < ema_slow[-1] and close[-1] < close[-3]
-    return False
+    entry_price = float(position["entryPrice"])
+    mark_price = float(await client.get_price(symbol))
+
+    profit_pct = (mark_price - entry_price) / entry_price if side == "LONG" else (entry_price - mark_price) / entry_price
+
+    return profit_pct >= 0.03  # 放寬條件：獲利 >= 3% 就加碼

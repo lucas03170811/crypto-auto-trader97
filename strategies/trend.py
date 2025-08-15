@@ -4,6 +4,7 @@ import numpy as np
 from config import TREND_EMA_FAST, TREND_EMA_SLOW, MACD_SIGNAL
 
 async def generate_trend_signal(client, symbol):
+    """放寬條件的趨勢判斷"""
     klines = await client.get_klines(symbol)
     closes = np.array([float(k[4]) for k in klines])
 
@@ -11,6 +12,7 @@ async def generate_trend_signal(client, symbol):
     ema_slow = talib.EMA(closes, timeperiod=TREND_EMA_SLOW)
     macd, macdsignal, _ = talib.MACD(closes, fastperiod=TREND_EMA_FAST, slowperiod=TREND_EMA_SLOW, signalperiod=MACD_SIGNAL)
 
+    # 放寬條件：只要EMA順序正確 + MACD 同向
     if ema_fast[-1] > ema_slow[-1] and macd[-1] > macdsignal[-1]:
         return {"side": "LONG"}
     elif ema_fast[-1] < ema_slow[-1] and macd[-1] < macdsignal[-1]:
@@ -28,4 +30,4 @@ async def should_pyramid(client, symbol, side):
 
     profit_pct = (mark_price - entry_price) / entry_price if side == "LONG" else (entry_price - mark_price) / entry_price
 
-    return profit_pct >= 0.03  # 放寬條件：獲利 >= 3% 就加碼
+    return profit_pct >= 0.03  # 獲利達 3% 觸發加碼

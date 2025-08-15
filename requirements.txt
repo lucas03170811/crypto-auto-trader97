@@ -1,4 +1,6 @@
+# 避免 numpy 與 ta-lib-bin 二進位不相容
+numpy==1.26.4
+pandas==2.2.2
+ta-lib-bin==0.4.28
 binance-futures-connector==4.1.0
-pandas
-numpy
-ta-lib-bin
+python-dotenv==1.0.1

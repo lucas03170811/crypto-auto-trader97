@@ -1,38 +1,37 @@
+# 使用 Python 3.11 slim 版本
 FROM python:3.11-slim
 
-# 安裝系統編譯工具和 TA-Lib 依賴
+# 安裝系統依賴（含 TA-Lib）
 RUN apt-get update && apt-get install -y \
     build-essential \
     wget \
-    git \
+    curl \
     tar \
-    && apt-get clean
+    libffi-dev \
+    libssl-dev \
+    python3-dev \
+    gcc \
+    make \
+    libta-lib0 \
+    libta-lib-dev \
+    && rm -rf /var/lib/apt/lists/*
 
-# 安裝 TA-Lib 原生庫
-RUN wget http://prdownloads.sourceforge.net/ta-lib/ta-lib-0.4.0-src.tar.gz \
-    && tar -xzf ta-lib-0.4.0-src.tar.gz \
-    && cd ta-lib && ./configure --prefix=/usr && make && make install \
-    && cd .. && rm -rf ta-lib ta-lib-0.4.0-src.tar.gz
-
-# 更新 pip
-RUN pip install --upgrade pip
-
-# 設定工作目錄
+# 建立工作目錄
 WORKDIR /app
 
-# 複製 requirements.txt 並安裝
+# 複製 requirements.txt 並安裝依賴
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# 強制重新複製專案（避免 cache）
-ARG CACHEBUST
-RUN echo "CACHEBUST=${CACHEBUST}"
+# 加入時間戳破快取
+ARG CACHEBUST=1
+RUN echo "Cache bust at $(date)" > /cachebuster.txt
+
+# 複製所有檔案
 COPY . .
 
-# 檢查 strategies/trend.py 是否存在
-RUN echo "===== /app tree =====" && ls -R /app || true \
-    && echo "===== /app/strategies =====" && ls -l /app/strategies || true \
-    && if [ -f /app/strategies/trend.py ]; then echo "[DEBUG] trend.py FOUND ✅"; else echo "[ERROR] trend.py NOT FOUND ❌" && exit 1; fi
+# 顯示 config.py 內容，確保是最新版本
+RUN echo "===== [Docker DEBUG] config.py 內容 =====" && cat /app/config.py && echo "===================================="
 
-# 啟動
+# 執行主程式
 CMD ["python", "main.py"]

@@ -12,7 +12,6 @@ async def generate_trend_signal(client, symbol):
     ema_slow = talib.EMA(closes, timeperiod=TREND_EMA_SLOW)
     macd, macdsignal, _ = talib.MACD(closes, fastperiod=TREND_EMA_FAST, slowperiod=TREND_EMA_SLOW, signalperiod=MACD_SIGNAL)
 
-    # 放寬條件：只要EMA順序正確 + MACD 同向
     if ema_fast[-1] > ema_slow[-1] and macd[-1] > macdsignal[-1]:
         return {"side": "LONG"}
     elif ema_fast[-1] < ema_slow[-1] and macd[-1] < macdsignal[-1]:

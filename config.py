@@ -4,7 +4,7 @@ import sys
 
 print("===== [CONFIG DEBUG] 載入設定檔 =====")
 
-# Binance API Key & Secret 從環境變數讀取（Railway 使用 BINANCE_API_KEY / BINANCE_API_SECRET）
+# Binance API Key & Secret 從 Railway 環境變數讀取
 API_KEY = os.getenv("BINANCE_API_KEY")
 API_SECRET = os.getenv("BINANCE_API_SECRET")
 

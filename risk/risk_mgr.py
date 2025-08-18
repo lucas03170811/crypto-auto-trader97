@@ -1,71 +1,122 @@
 # risk/risk_mgr.py
 import math
-from typing import Optional
+import time
+import requests
+
 from config import (
-    EQUITY_RATIO,
-    PYRAMID_ADD_RATIO,
-    MIN_NOTIONAL_USDT,
-    DEBUG_MODE,
+    MIN_NOTIONAL_USDT, FORCE_MIN_NOTIONAL, EQUITY_RATIO, LEVERAGE, DEBUG_MODE
 )
+
+FAPI_BASE = "https://fapi.binance.com"
 
 class RiskManager:
     def __init__(self, client):
         self.client = client
+        self._exchange_info_cache = None
+        self._filters = {}  # symbol -> dict
 
-    async def _safe_price(self, symbol: str) -> Optional[float]:
-        try:
-            return float(await self.client.get_price(symbol))
-        except Exception as e:
-            print(f"[ERROR] get_price {symbol} failed: {e}")
-            return None
+    # ---------- Exchange Info & Filters ----------
+    def _load_exchange_info(self):
+        if self._exchange_info_cache is None:
+            url = f"{FAPI_BASE}/fapi/v1/exchangeInfo"
+            self._exchange_info_cache = requests.get(url, timeout=10).json()
+        return self._exchange_info_cache
 
-    async def _safe_equity(self) -> Optional[float]:
-        try:
-            return float(await self.client.get_equity())
-        except Exception as e:
-            print(f"[ERROR] get_equity failed: {e}")
-            return None
+    def _parse_filters(self, symbol):
+        if symbol in self._filters:
+            return self._filters[symbol]
+        info = self._load_exchange_info()
+        symbols = {s["symbol"]: s for s in info["symbols"]}
+        if symbol not in symbols:
+            raise ValueError(f"[RISK] exchangeInfo 無此交易對: {symbol}")
 
-    async def _order_qty(self, symbol: str, price: float, pyramid: bool) -> float:
-        equity = await self._safe_equity()
-        if equity is None or equity <= 0:
-            return 0.0
+        entry = symbols[symbol]
+        lot = next(f for f in entry["filters"] if f["filterType"] == "LOT_SIZE")
+        pricef = next(f for f in entry["filters"] if f["filterType"] == "PRICE_FILTER")
+        # MIN_NOTIONAL 在 U 本位永續有時叫 "MIN_NOTIONAL" 且鍵為 "notional"
+        min_notional_f = next((f for f in entry["filters"] if f["filterType"] == "MIN_NOTIONAL"), None)
 
-        usd = equity * EQUITY_RATIO
-        if pyramid:
-            usd *= (1.0 + PYRAMID_ADD_RATIO)
+        filters = {
+            "stepSize": float(lot["stepSize"]),
+            "minQty": float(lot["minQty"]),
+            "tickSize": float(pricef["tickSize"]),
+            "minNotional": float(min_notional_f.get("notional", MIN_NOTIONAL_USDT)) if min_notional_f else MIN_NOTIONAL_USDT
+        }
+        self._filters[symbol] = filters
+        return filters
 
-        qty = usd / max(price, 1e-9)
-        # 粗略名義金額檢查（部分交易所要求 >= 5 USDT）
-        if qty * price < MIN_NOTIONAL_USDT:
-            if DEBUG_MODE:
-                print(f"[RISK] qty too small: {symbol} notional={qty*price:.2f} < {MIN_NOTIONAL_USDT}")
-            return 0.0
+    # ---------- Helpers ----------
+    @staticmethod
+    def _floor_to_step(qty, step):
+        # 依 stepSize 向下取整，避免 LOT_SIZE 錯誤
+        return math.floor(qty / step) * step
 
-        # 四捨五入到 6 位，避免過細數量
-        qty = math.floor(qty * 1e6) / 1e6
-        return max(qty, 0.0)
+    def _get_price(self, symbol):
+        url = f"{FAPI_BASE}/fapi/v1/ticker/price?symbol={symbol}"
+        return float(requests.get(url, timeout=5).json()["price"])
 
-    async def execute_order(self, symbol: str, side: str, pyramid: bool = False):
+    def _get_equity(self):
+        # 優先使用 client 的方法（若有）
+        if hasattr(self.client, "get_equity"):
+            try:
+                return float(self.client.get_equity())
+            except Exception:
+                pass
+        return None
+
+    def ensure_leverage(self, symbol):
+        # 能設就設，不行就略過
+        if hasattr(self.client, "set_leverage"):
+            try:
+                self.client.set_leverage(symbol, LEVERAGE)
+            except Exception:
+                if DEBUG_MODE:
+                    print(f"[RISK] set_leverage 跳過: {symbol}")
+
+    # ---------- Public: 計算下單數量（強制滿足 minNotional） ----------
+    def get_order_qty(self, symbol, price=None, base_qty=None):
         """
-        side: 'LONG' or 'SHORT'
+        回傳對齊 stepSize、且 notional >= minNotional 的數量。
+        - 若設 EQUITY_RATIO 且能讀到 equity，取 max( equity*ratio , minNotional ) / price
+        - 若無法讀 equity 或 FORCE_MIN_NOTIONAL=True，至少補到 minNotional。
         """
-        price = await self._safe_price(symbol)
-        if price is None:
-            return
+        filters = self._parse_filters(symbol)
+        step = filters["stepSize"]
+        min_qty = filters["minQty"]
+        min_notional = max(filters["minNotional"], MIN_NOTIONAL_USDT)
 
-        qty = await self._order_qty(symbol, price, pyramid)
-        if qty <= 0:
-            return
+        price = price or self._get_price(symbol)
 
-        try:
-            if side.upper() == "LONG":
-                await self.client.open_long(symbol, qty)
-                print(f"[ORDER] LONG {symbol} qty={qty}")
-            elif side.upper() == "SHORT":
-                await self.client.open_short(symbol, qty)
-                print(f"[ORDER] SHORT {symbol} qty={qty}")
-            else:
-                print(f"[WARN] Unknown side: {side}")
-        except Exception as e:
-            print(f"[ERROR] execute_order {symbol} {side} failed: {e}")
+        # 目標名目金額
+        target_notional = min_notional
+        eq = self._get_equity()
+        if eq is not None and EQUITY_RATIO > 0:
+            target_notional = max(min_notional, eq * EQUITY_RATIO)
+
+        # 若有傳入 base_qty（例如加碼比率），在底線上再放大
+        if base_qty:
+            target_notional = max(target_notional, base_qty * price)
+
+        raw_qty = target_notional / price
+        qty = self._floor_to_step(raw_qty, step)
+
+        # 強制對齊 minQty
+        if qty < min_qty:
+            qty = min_qty
+
+        # 再檢查 notional（避免浮點誤差）
+        notional = qty * price
+        if FORCE_MIN_NOTIONAL and notional < min_notional:
+            # 向上補到 minNotional
+            need_qty = (min_notional / price)
+            # 用 ceil 以確保 >= minNotional，再對齊 step
+            k = math.ceil(need_qty / step)
+            qty = k * step
+
+        # 最終保險：不允許成為 0
+        qty = max(qty, min_qty)
+
+        if DEBUG_MODE:
+            print(f"[RISK] {symbol} price={price:.6f} step={step} minQty={min_qty} "
+                  f"minNotional={min_notional} -> qty={qty} notional≈{qty*price:.4f}")
+        return qty

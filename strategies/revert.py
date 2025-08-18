@@ -1,21 +1,16 @@
 # strategies/revert.py
-import pandas as pd
-import talib
+import pandas_ta as ta
 from config import REVERT_RSI_OVERBOUGHT, REVERT_RSI_OVERSOLD, BOLL_STD_DEV
 
-def generate_revert_signal(df: pd.DataFrame):
-    if len(df) < 50:
-        return None
+def generate_revert_signal(df):
+    df["rsi"] = ta.rsi(df["close"], length=14)
+    bbands = ta.bbands(df["close"], length=20, std=BOLL_STD_DEV)
 
-    close = df["close"].astype(float).values
+    df["bb_lower"] = bbands["BBL_20_2.0"]
+    df["bb_upper"] = bbands["BBU_20_2.0"]
 
-    rsi = talib.RSI(close, timeperiod=14)
-    upper, middle, lower = talib.BBANDS(close, timeperiod=20, nbdevup=BOLL_STD_DEV, nbdevdn=BOLL_STD_DEV, matype=0)
-
-    # 放寬條件 → RSI 與 BOLL 同時觸發才進場
-    if rsi[-1] < REVERT_RSI_OVERSOLD and close[-1] < lower[-1]:
-        return "LONG"
-    elif rsi[-1] > REVERT_RSI_OVERBOUGHT and close[-1] > upper[-1]:
-        return "SHORT"
-
+    if df["rsi"].iloc[-1] < REVERT_RSI_OVERSOLD and df["close"].iloc[-1] < df["bb_lower"].iloc[-1]:
+        return "BUY"
+    elif df["rsi"].iloc[-1] > REVERT_RSI_OVERBOUGHT and df["close"].iloc[-1] > df["bb_upper"].iloc[-1]:
+        return "SELL"
     return None

@@ -1,10 +1,6 @@
-# talib 與 numpy 的穩定組合
+# requirements.txt
+--no-cache-dir
 numpy==1.26.4
 pandas==2.2.2
-ta-lib-bin==0.4.26
-
-# 你目前的 UMFutures 走這個套件（請勿同時裝 binance-connector 以免命名空間衝突）
 binance-futures-connector==4.1.0
-
-# 如果你有用 .env，可保留；沒用可以刪掉
-python-dotenv==1.0.1
+ta-lib-bin==0.4.26

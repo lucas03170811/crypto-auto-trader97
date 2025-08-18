@@ -19,7 +19,6 @@ print(f"API_SECRET: {'✅ 已讀取' if API_SECRET else '❌ 未讀取'}")
 MAX_LOSS_PCT = 0.3               # 固定止損百分比
 TRAIL_GIVEBACK_PCT = 0.15        # 獲利回調觸發移動停損
 EQUITY_RATIO = 0.1               # 每次下單使用資金比例
-BASE_QTY = 0.001                  # 預設下單數量，避免 qty too small
 
 # 交易幣種池
 SYMBOL_POOL = [
@@ -27,7 +26,6 @@ SYMBOL_POOL = [
     "DOGEUSDT","LINKUSDT","AVAXUSDT","MATICUSDT",
     "SUIUSDT","SEIUSDT","1000PEPEUSDT","1000BONKUSDT"
 ]
-
 print(f"交易幣種數量: {len(SYMBOL_POOL)}")
 
 # 篩選條件
@@ -40,8 +38,8 @@ TREND_EMA_SLOW = 26
 MACD_SIGNAL = 9
 
 # 反轉策略參數
-REVERT_RSI_OVERBOUGHT = 60   # 放寬條件
-REVERT_RSI_OVERSOLD = 40     # 放寬條件
+REVERT_RSI_OVERBOUGHT = 60
+REVERT_RSI_OVERSOLD = 40
 BOLL_STD_DEV = 2
 
 # K 線設定

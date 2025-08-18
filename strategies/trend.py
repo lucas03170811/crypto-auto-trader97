@@ -1,38 +1,25 @@
 # strategies/trend.py
-import pandas as pd
-import talib
+import pandas_ta as ta
 from config import TREND_EMA_FAST, TREND_EMA_SLOW, MACD_SIGNAL
 
-def generate_trend_signal(df: pd.DataFrame):
-    if len(df) < 50:
-        return None
+def generate_trend_signal(df):
+    df["ema_fast"] = ta.ema(df["close"], length=TREND_EMA_FAST)
+    df["ema_slow"] = ta.ema(df["close"], length=TREND_EMA_SLOW)
 
-    close = df["close"].astype(float).values
+    macd = ta.macd(df["close"], fast=TREND_EMA_FAST, slow=TREND_EMA_SLOW, signal=MACD_SIGNAL)
+    df["macd"] = macd["MACD_12_26_9"]
+    df["macd_signal"] = macd["MACDs_12_26_9"]
 
-    ema_fast = talib.EMA(close, timeperiod=TREND_EMA_FAST)
-    ema_slow = talib.EMA(close, timeperiod=TREND_EMA_SLOW)
-    macd, macdsignal, macdhist = talib.MACD(close, fastperiod=TREND_EMA_FAST, slowperiod=TREND_EMA_SLOW, signalperiod=MACD_SIGNAL)
-
-    # 放寬條件 → 只要 EMA 有交叉就進場
-    if ema_fast[-1] > ema_slow[-1] and macd[-1] > macdsignal[-1]:
-        return "LONG"
-    elif ema_fast[-1] < ema_slow[-1] and macd[-1] < macdsignal[-1]:
-        return "SHORT"
-
+    if df["ema_fast"].iloc[-1] > df["ema_slow"].iloc[-1] and df["macd"].iloc[-1] > df["macd_signal"].iloc[-1]:
+        return "BUY"
+    elif df["ema_fast"].iloc[-1] < df["ema_slow"].iloc[-1] and df["macd"].iloc[-1] < df["macd_signal"].iloc[-1]:
+        return "SELL"
     return None
 
-def should_pyramid(df: pd.DataFrame, direction: str):
-    """單邊行情加碼條件"""
-    if len(df) < 50:
-        return False
-
-    close = df["close"].astype(float).values
-    ema_fast = talib.EMA(close, timeperiod=TREND_EMA_FAST)
-    ema_slow = talib.EMA(close, timeperiod=TREND_EMA_SLOW)
-
-    if direction == "LONG" and ema_fast[-1] > ema_slow[-1]:
+def should_pyramid(df, signal):
+    """判斷是否加碼"""
+    if signal == "BUY" and df["close"].iloc[-1] > df["ema_fast"].iloc[-1]:
         return True
-    if direction == "SHORT" and ema_fast[-1] < ema_slow[-1]:
+    if signal == "SELL" and df["close"].iloc[-1] < df["ema_fast"].iloc[-1]:
         return True
-
     return False

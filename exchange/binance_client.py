@@ -1,124 +1,74 @@
 # exchange/binance_client.py
-import asyncio
-from typing import Any, List, Optional
+import pandas as pd
 from binance.um_futures import UMFutures
-
-print("[DEBUG] 正確版本 binance_client.py 被載入 ✅")
+from config import (
+    API_KEY, API_SECRET,
+    MIN_NOTIONAL_USDT, LEVERAGE, FORCE_MIN_NOTIONAL, DEBUG_MODE
+)
 
 class BinanceClient:
-    def __init__(self, api_key: str, api_secret: str, base_url: str = "https://fapi.binance.com"):
-        self.client = UMFutures(api_key, api_secret, base_url=base_url)
+    def __init__(self, api_key=API_KEY, api_secret=API_SECRET):
+        self.client = UMFutures(key=api_key, secret=api_secret)
+        print("[DEBUG] 正確版本 binance_client.py 被載入 ✅")
 
-    async def _run_sync(self, fn, *args, **kwargs):
-        return await asyncio.to_thread(lambda: fn(*args, **kwargs))
-
-    async def get_klines(self, symbol: str, interval: str = "15m", limit: int = 100) -> List[Any]:
+    def get_klines(self, symbol, interval="5m", limit=200):
+        """取得K線資料"""
         try:
-            return await self._run_sync(self.client.klines, symbol=symbol, interval=interval, limit=limit)
+            klines = self.client.klines(symbol, interval=interval, limit=limit)
+            df = pd.DataFrame(klines, columns=[
+                "timestamp","open","high","low","close","volume",
+                "_","quote","trades","taker_base","taker_quote","ignore"
+            ])
+            df["open"] = df["open"].astype(float)
+            df["high"] = df["high"].astype(float)
+            df["low"] = df["low"].astype(float)
+            df["close"] = df["close"].astype(float)
+            df["volume"] = df["volume"].astype(float)
+            return df
         except Exception as e:
-            print(f"[ERROR] Failed to fetch klines for {symbol}: {e}")
-            return []
-
-    async def get_price(self, symbol: str) -> float:
-        try:
-            res = await self._run_sync(self.client.ticker_price, symbol=symbol)
-            return float(res.get("price", 0.0))
-        except Exception as e:
-            print(f"[ERROR] Failed to get price for {symbol}: {e}")
-            return 0.0
-
-    async def get_24h_stats(self, symbol: str) -> Optional[dict]:
-        try:
-            return await self._run_sync(self.client.ticker_24hr_price_change, symbol=symbol)
-        except Exception as e:
-            print(f"[ERROR] Failed to get 24h stats for {symbol}: {e}")
+            print(f"[ERROR] get_klines {symbol}: {e}")
             return None
 
-    async def get_latest_funding_rate(self, symbol: str) -> Optional[float]:
+    def get_price(self, symbol):
+        """取得最新價格"""
         try:
-            data = await self._run_sync(self.client.funding_rate, symbol=symbol, limit=1)
-            if isinstance(data, list) and data:
-                return float(data[0].get("fundingRate", 0.0))
+            ticker = self.client.ticker_price(symbol=symbol)
+            return float(ticker["price"])
         except Exception as e:
-            print(f"[ERROR] Failed to get funding rate for {symbol}: {e}")
-        return None
-
-    async def get_symbol_info(self, symbol: str) -> Optional[dict]:
-        try:
-            data = await self._run_sync(self.client.exchange_info)
-            if isinstance(data, dict) and "symbols" in data:
-                for s in data["symbols"]:
-                    if s.get("symbol") == symbol:
-                        return s
-        except Exception as e:
-            print(f"[ERROR] Failed to get symbol info for {symbol}: {e}")
-        return None
-
-    async def get_position(self, symbol: str) -> float:
-        try:
-            pos_list = await self._run_sync(self.client.get_position_risk, symbol=symbol)
-            for p in pos_list:
-                if p.get("symbol") == symbol:
-                    return float(p.get("positionAmt", 0.0))
-        except Exception as e:
-            print(f"[ERROR] Failed to get position for {symbol}: {e}")
-        return 0.0
-
-    async def get_equity(self) -> float:
-        try:
-            bal = await self._run_sync(self.client.balance)
-            for a in bal:
-                if a.get("asset") == "USDT":
-                    return float(a.get("balance", 0.0))
-        except Exception as e:
-            print(f"[ERROR] Failed to get equity: {e}")
-        return 0.0
-
-    async def open_long(self, symbol: str, qty: float):
-        try:
-            res = await self._run_sync(
-                self.client.new_order,
-                symbol=symbol, side="BUY", type="MARKET", quantity=qty
-            )
-            print(f"[ORDER] Opened LONG {symbol} qty={qty} -> {res}")
-            return res
-        except Exception as e:
-            print(f"[ERROR] Failed to open LONG {symbol}: {e}")
+            print(f"[ERROR] get_price {symbol}: {e}")
             return None
 
-    async def open_short(self, symbol: str, qty: float):
+    def order(self, symbol, side, qty=0.01):
+        """建立市價單，會檢查 notional >= 最小金額"""
         try:
-            res = await self._run_sync(
-                self.client.new_order,
-                symbol=symbol, side="SELL", type="MARKET", quantity=qty
-            )
-            print(f"[ORDER] Opened SHORT {symbol} qty={qty} -> {res}")
-            return res
-        except Exception as e:
-            print(f"[ERROR] Failed to open SHORT {symbol}: {e}")
-            return None
-
-    async def close_position(self, symbol: str):
-        """
-        使用 reduceOnly 市價單關閉整個倉位（避免反手）。
-        """
-        try:
-            amt = await self.get_position(symbol)
-            if amt == 0:
-                print(f"[CLOSE] {symbol} no position to close.")
+            price = self.get_price(symbol)
+            if not price:
+                print(f"[ERROR] 無法取得 {symbol} 價格，下單取消")
                 return None
-            side = "SELL" if amt > 0 else "BUY"
-            qty = abs(amt)
-            res = await self._run_sync(
-                self.client.new_order,
+
+            notional = price * qty
+            if notional < MIN_NOTIONAL_USDT:
+                if FORCE_MIN_NOTIONAL:
+                    qty = round(MIN_NOTIONAL_USDT / price, 3)  # 自動補足數量
+                    print(f"[ADJUST] {symbol} 下單數量過小，自動補足至 {qty} (~{MIN_NOTIONAL_USDT} USDT)")
+                else:
+                    print(f"[RISK] qty too small: {symbol} notional={notional:.2f} < {MIN_NOTIONAL_USDT}")
+                    return None
+
+            if DEBUG_MODE:
+                print(f"[ORDER-DEBUG] {side} {symbol} x {qty}")
+                return {"symbol": symbol, "side": side, "qty": qty, "debug": True}
+
+            # 真正送單
+            order = self.client.new_order(
                 symbol=symbol,
                 side=side,
                 type="MARKET",
-                quantity=qty,
-                reduceOnly=True
+                quantity=qty
             )
-            print(f"[CLOSE] {symbol} reduceOnly {side} qty={qty} -> {res}")
-            return res
+            print(f"[ORDER] {side} {symbol} x {qty} 成功 ✅")
+            return order
+
         except Exception as e:
-            print(f"[ERROR] Failed to close position for {symbol}: {e}")
+            print(f"[ERROR] order {symbol}: {e}")
             return None

@@ -4,12 +4,12 @@ import sys
 
 print("===== [CONFIG DEBUG] 載入設定檔 =====")
 
-# 從環境變數讀取 API Key & Secret（名稱需與 Railway Environment Variables 相同）
+# Binance API Key & Secret 從環境變數讀取
 API_KEY = os.getenv("BINANCE_API_KEY")
 API_SECRET = os.getenv("BINANCE_API_SECRET")
 
 if not API_KEY or not API_SECRET:
-    print("[ERROR] 環境變數 BINANCE_API_KEY 或 BINANCE_API_SECRET 未設定")
+    print("[ERROR] 環境變數 BINANCE_API_KEY 或 BINANCE_API_SECRET 未設定，請到 Railway 設定 Environment Variables")
     sys.exit(1)
 
 print(f"API_KEY: {'✅ 已讀取' if API_KEY else '❌ 未讀取'}")
@@ -19,6 +19,7 @@ print(f"API_SECRET: {'✅ 已讀取' if API_SECRET else '❌ 未讀取'}")
 MAX_LOSS_PCT = 0.3               # 固定止損百分比
 TRAIL_GIVEBACK_PCT = 0.15        # 獲利回調觸發移動停損
 EQUITY_RATIO = 0.1               # 每次下單使用資金比例
+BASE_QTY = 0.001                  # 預設下單數量，避免 qty too small
 
 # 交易幣種池
 SYMBOL_POOL = [
@@ -39,8 +40,8 @@ TREND_EMA_SLOW = 26
 MACD_SIGNAL = 9
 
 # 反轉策略參數
-REVERT_RSI_OVERBOUGHT = 65
-REVERT_RSI_OVERSOLD = 35
+REVERT_RSI_OVERBOUGHT = 60   # 放寬條件
+REVERT_RSI_OVERSOLD = 40     # 放寬條件
 BOLL_STD_DEV = 2
 
 # K 線設定

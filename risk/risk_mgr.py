@@ -1,54 +1,71 @@
 # risk/risk_mgr.py
-from decimal import Decimal, ROUND_DOWN, getcontext
-from config import EQUITY_RATIO, MAX_LOSS_PCT, TRAIL_GIVEBACK_PCT
-
-getcontext().prec = 18
+import math
+from typing import Optional
+from config import (
+    EQUITY_RATIO,
+    PYRAMID_ADD_RATIO,
+    MIN_NOTIONAL_USDT,
+    DEBUG_MODE,
+)
 
 class RiskManager:
     def __init__(self, client):
         self.client = client
-        self.equity_ratio = Decimal(str(EQUITY_RATIO))
 
-    async def get_order_qty(self, symbol: str, min_qty: float = 0.0) -> float:
-        equity = await self.client.get_equity()
-        price = await self.client.get_price(symbol)
-        if price <= 0:
+    async def _safe_price(self, symbol: str) -> Optional[float]:
+        try:
+            return float(await self.client.get_price(symbol))
+        except Exception as e:
+            print(f"[ERROR] get_price {symbol} failed: {e}")
+            return None
+
+    async def _safe_equity(self) -> Optional[float]:
+        try:
+            return float(await self.client.get_equity())
+        except Exception as e:
+            print(f"[ERROR] get_equity failed: {e}")
+            return None
+
+    async def _order_qty(self, symbol: str, price: float, pyramid: bool) -> float:
+        equity = await self._safe_equity()
+        if equity is None or equity <= 0:
             return 0.0
 
-        usdt_amount = Decimal(str(equity)) * self.equity_ratio
-        raw_qty = usdt_amount / Decimal(str(price))
+        usd = equity * EQUITY_RATIO
+        if pyramid:
+            usd *= (1.0 + PYRAMID_ADD_RATIO)
 
-        info = await self.client.get_symbol_info(symbol)
-        step_size = Decimal("0.0001")  # default
-        min_notional = Decimal("5.0")  # default
+        qty = usd / max(price, 1e-9)
+        # 粗略名義金額檢查（部分交易所要求 >= 5 USDT）
+        if qty * price < MIN_NOTIONAL_USDT:
+            if DEBUG_MODE:
+                print(f"[RISK] qty too small: {symbol} notional={qty*price:.2f} < {MIN_NOTIONAL_USDT}")
+            return 0.0
 
-        if info and "filters" in info:
-            for f in info["filters"]:
-                if f["filterType"] == "LOT_SIZE":
-                    step_size = Decimal(f["stepSize"])
-                if f["filterType"] == "MIN_NOTIONAL":
-                    min_notional = Decimal(f["notional"])
+        # 四捨五入到 6 位，避免過細數量
+        qty = math.floor(qty * 1e6) / 1e6
+        return max(qty, 0.0)
 
-        precision = abs(step_size.as_tuple().exponent)
-        qty = raw_qty.quantize(Decimal(f"1.{'0'*precision}"), rounding=ROUND_DOWN)
+    async def execute_order(self, symbol: str, side: str, pyramid: bool = False):
+        """
+        side: 'LONG' or 'SHORT'
+        """
+        price = await self._safe_price(symbol)
+        if price is None:
+            return
 
-        # 確保達到最小名義價值
-        if qty * Decimal(str(price)) < min_notional:
-            qty = (min_notional / Decimal(str(price))).quantize(Decimal(f"1.{'0'*precision}"), rounding=ROUND_DOWN)
+        qty = await self._order_qty(symbol, price, pyramid)
+        if qty <= 0:
+            return
 
-        qty_f = float(qty)
-        return qty_f if qty_f >= min_qty else 0.0
-
-    def get_stop_loss_price(self, entry_price: float, side: str) -> float:
-        """固定止損價格"""
-        if side == "LONG":
-            return entry_price * (1 - MAX_LOSS_PCT)
-        else:
-            return entry_price * (1 + MAX_LOSS_PCT)
-
-    def get_trailing_stop_price(self, peak_price: float, side: str) -> float:
-        """移動停損價格"""
-        if side == "LONG":
-            return peak_price * (1 - TRAIL_GIVEBACK_PCT)
-        else:
-            return peak_price * (1 + TRAIL_GIVEBACK_PCT)
+        try:
+            if side.upper() == "LONG":
+                await self.client.open_long(symbol, qty)
+                print(f"[ORDER] LONG {symbol} qty={qty}")
+            elif side.upper() == "SHORT":
+                await self.client.open_short(symbol, qty)
+                print(f"[ORDER] SHORT {symbol} qty={qty}")
+            else:
+                print(f"[WARN] Unknown side: {side}")
+        except Exception as e:
+            print(f"[ERROR] execute_order {symbol} {side} failed: {e}")

@@ -1,6 +1,5 @@
 # requirements.txt
---no-cache-dir
+binance-futures-connector==4.1.0
 numpy==1.26.4
 pandas==2.2.2
-binance-futures-connector==4.1.0
-ta-lib-bin==0.4.26
+ta-lib==0.4.28

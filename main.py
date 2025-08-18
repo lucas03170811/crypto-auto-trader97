@@ -1,56 +1,42 @@
 # main.py
 import asyncio
-import pandas as pd
 from exchange.binance_client import BinanceClient
 from risk.risk_mgr import RiskManager
-from config import SYMBOL_POOL, DEBUG_MODE, BASE_QTY
 from strategies.trend import generate_trend_signal, should_pyramid
 from strategies.revert import generate_revert_signal
-
-client = BinanceClient()
-risk = RiskManager(client)
+from config import SYMBOL_POOL, DEBUG_MODE
 
 async def scanner():
     print("[BOOT] Starting scanner...")
+    client = BinanceClient()
+    risk_mgr = RiskManager(client)
+
     while True:
-        for sym in SYMBOL_POOL:
-            print(f"[SCAN] {sym}")
-            try:
-                df = await client.get_klines_df(sym)
-                if df is None or df.empty:
-                    print(f"[NO DATA] {sym}")
-                    continue
+        for symbol in SYMBOL_POOL:
+            print(f"[SCAN] {symbol}")
+            df = await client.get_klines(symbol)
 
-                # 產生交易信號
-                signal = generate_trend_signal(df) or generate_revert_signal(df)
+            if df is None or df.empty:
+                continue
 
-                if signal:
-                    print(f"[SIGNAL] {sym} -> {signal}")
+            # 趨勢策略
+            trend_signal = generate_trend_signal(df)
+            # 反轉策略
+            revert_signal = generate_revert_signal(df)
 
-                    # 取得下單數量
-                    qty = risk.get_order_qty(sym, BASE_QTY)
-                    if qty <= 0:
-                        print(f"[RISK] qty too small: {sym}")
-                        continue
+            # 下單邏輯
+            if trend_signal in ["BUY", "SELL"]:
+                await risk_mgr.execute_order(symbol, trend_signal)
 
-                    # 根據訊號下單
-                    if signal == "LONG":
-                        await client.open_long(sym, qty)
-                    elif signal == "SHORT":
-                        await client.open_short(sym, qty)
+                # 加碼判斷
+                if should_pyramid(df, trend_signal):
+                    print(f"[PYRAMID] {symbol} 符合加碼條件")
+                    await risk_mgr.execute_order(symbol, trend_signal, pyramid=True)
 
-                    # 加碼判斷
-                    if should_pyramid(df, signal):
-                        print(f"[PYRAMID] {sym} 加碼 {signal}")
-                        await client.open_long(sym, qty) if signal == "LONG" else await client.open_short(sym, qty)
+            elif revert_signal in ["BUY", "SELL"]:
+                await risk_mgr.execute_order(symbol, revert_signal)
 
-                else:
-                    print(f"[NO SIGNAL] {sym}")
-
-            except Exception as e:
-                print(f"[ERROR] {sym}: {e}")
-
-        await asyncio.sleep(60)  # 每分鐘掃描一次
+        await asyncio.sleep(60)
 
 if __name__ == "__main__":
     asyncio.run(scanner())

@@ -1,21 +1,7 @@
-# risk/risk_mgr.py
-from decimal import Decimal, ROUND_DOWN, getcontext
-import config
-
-getcontext().prec = 18
-
-class RiskManager:
-    def __init__(self, client, equity_ratio: float = None):
-        self.client = client
-        self.equity_ratio = Decimal(str(equity_ratio if equity_ratio is not None else config.EQUITY_RATIO))
-
     async def get_order_qty(self, symbol: str, min_qty: float = 0.0) -> float:
         """
-        Compute order qty (float) that:
-          - uses the larger of BASE_QTY_USD or equity * equity_ratio (so you get reasonable size)
-          - aligns to stepSize
-          - ensures notional >= exchange min_notional (or per-symbol override)
-          - returns 0.0 if resulting qty < min_qty
+        Compute order qty and ensure notional >= min_notional.
+        Includes DEBUG prints for troubleshooting.
         """
         equity = await self.client.get_equity()
         try:
@@ -23,27 +9,33 @@ class RiskManager:
         except Exception:
             equity_d = Decimal("0")
 
-        # desired USD notional: either fixed BASE_QTY_USD or equity_ratio portion
         base_usd = Decimal(str(config.BASE_QTY_USD))
-        desire_by_ratio = (equity_d * self.equity_ratio) if equity_d > 0 else base_usd
+        desire_by_ratio = (equity_d * Decimal(str(config.EQUITY_RATIO))) if equity_d > 0 else Decimal("0")
         desired_usd = max(base_usd, desire_by_ratio)
 
         price = await self.client.get_price(symbol)
         if price <= 0:
+            print(f"[DEBUG][{symbol}] price invalid: {price}")
             return 0.0
         price_d = Decimal(str(price))
 
-        # raw qty to achieve desired_usd
         raw_qty = desired_usd / price_d
+        print(f"[DEBUG][{symbol}] equity={equity_d}, base_usd={base_usd}, ratio_usd={desire_by_ratio}, chosen_usd={desired_usd}, price={price_d}, raw_qty={raw_qty}")
 
-        # adjust to meet min notional and steps
         adjusted_qty = await self.client.adjust_qty_for_min_notional(symbol, float(raw_qty))
 
-        # enforce min_qty (e.g. BASE_QTY absolute minimal qty)
-        if adjusted_qty is None:
-            return 0.0
+        if adjusted_qty is None or adjusted_qty <= 0:
+            min_notional = await self.client.get_min_notional(symbol)
+            required_qty = (min_notional / price_d)
+            print(f"[DEBUG][{symbol}] fallback required_qty={required_qty} for min_notional={min_notional}")
+            adjusted_qty2 = await self.client.adjust_qty_for_min_notional(symbol, float(required_qty))
+            if adjusted_qty2 is None:
+                return 0.0
+            adjusted_qty = adjusted_qty2
+
         if float(adjusted_qty) < float(min_qty):
-            # qty too small to place a valid order
+            print(f"[DEBUG][{symbol}] adjusted_qty={adjusted_qty} < min_qty={min_qty} ❌ skip")
             return 0.0
 
+        print(f"[DEBUG][{symbol}] FINAL_QTY={adjusted_qty}, FINAL_NOTIONAL={(Decimal(str(adjusted_qty))*price_d)} ✅ ready")
         return float(adjusted_qty)

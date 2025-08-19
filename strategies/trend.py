@@ -4,60 +4,38 @@ import pandas_ta as ta
 from config import TREND_EMA_FAST, TREND_EMA_SLOW, MACD_SIGNAL
 
 def generate_trend_signal(df: pd.DataFrame):
-    """
-    Input: pandas.DataFrame with at least columns: ['close','high','low','volume']
-    Output: 'long' / 'short' / None
-    - Uses EMA crossover + MACD signal with relaxed thresholds for daily trades.
-    """
-    if df is None:
+    if df is None or len(df) < max(TREND_EMA_SLOW+5, 30):
         return None
 
-    # require minimum rows
-    if len(df) < max(TREND_EMA_SLOW + 5, 30):
-        return None
-
-    # Ensure numeric
     df = df.copy()
     df['close'] = pd.to_numeric(df['close'], errors='coerce')
     df['high'] = pd.to_numeric(df['high'], errors='coerce')
     df['low']  = pd.to_numeric(df['low'], errors='coerce')
     df['volume'] = pd.to_numeric(df.get('volume', pd.Series([0]*len(df))), errors='coerce')
 
-    # relaxed avg volume filter (prevent tiny illiquid coins)
-    avg_vol = df['volume'].rolling(14).mean().iloc[-1]
+    # relaxed volume filter
     try:
+        avg_vol = df['volume'].rolling(14).mean().iloc[-1]
         if avg_vol is not None and pd.notna(avg_vol) and float(avg_vol) < 100_000:
-            # If volume too low, skip — tweak threshold if you need even more signals
             return None
     except Exception:
-        # if volume data problematic, don't let it crash
         pass
 
-    # EMA
+    # EMA and MACD
     try:
         df['ema_fast'] = ta.ema(df['close'], length=TREND_EMA_FAST)
         df['ema_slow'] = ta.ema(df['close'], length=TREND_EMA_SLOW)
+        macd = ta.macd(df['close'], fast=12, slow=26, signal=MACD_SIGNAL)
     except Exception:
-        # fallback using pandas ewm if pandas_ta fails
         df['ema_fast'] = df['close'].ewm(span=TREND_EMA_FAST, adjust=False).mean()
         df['ema_slow'] = df['close'].ewm(span=TREND_EMA_SLOW, adjust=False).mean()
+        fast = df['close'].ewm(span=12, adjust=False).mean()
+        slow = df['close'].ewm(span=26, adjust=False).mean()
+        macd = {'MACD_12_26_9': fast - slow, 'MACDs_12_26_9': (fast - slow).ewm(span=MACD_SIGNAL, adjust=False).mean()}
 
-    # MACD
-    macd = ta.macd(df['close'], fast=12, slow=26, signal=MACD_SIGNAL)
-    macd_line = macd.get('MACD_12_26_9') if 'MACD_12_26_9' in macd else macd.get('MACD_12_26_9')  # attempt keys
-    signal_line = macd.get('MACDs_12_26_9') if 'MACDs_12_26_9' in macd else macd.get('MACDs_12_26_9')
+    macd_line = macd.get('MACD_12_26_9')
+    signal_line = macd.get('MACDs_12_26_9')
 
-    # fallback: compute simple MACD differences if no pandas_ta
-    if macd_line is None or signal_line is None:
-        try:
-            fast = df['close'].ewm(span=12, adjust=False).mean()
-            slow = df['close'].ewm(span=26, adjust=False).mean()
-            macd_line = fast - slow
-            signal_line = macd_line.ewm(span=MACD_SIGNAL, adjust=False).mean()
-        except Exception:
-            return None
-
-    # take last values
     try:
         ema_f = df['ema_fast'].iloc[-1]
         ema_s = df['ema_slow'].iloc[-1]
@@ -66,12 +44,27 @@ def generate_trend_signal(df: pd.DataFrame):
     except Exception:
         return None
 
-    # relaxed thresholds for daily signals
-    # If EMAs crossing and MACD above/below its signal -> trend
     if pd.notna(ema_f) and pd.notna(ema_s) and pd.notna(m) and pd.notna(s):
         if (ema_f > ema_s) and (m > s):
             return 'long'
         if (ema_f < ema_s) and (m < s):
             return 'short'
-
     return None
+
+def should_pyramid(df: pd.DataFrame, direction: str) -> bool:
+    """
+    Decide whether to pyramid (add units) when trend continues.
+    direction: 'long' or 'short'
+    Heuristic: ADX strong + EMA separation magnitude
+    """
+    if df is None or len(df) < 20:
+        return False
+    try:
+        adx = ta.adx(df['high'], df['low'], df['close'], length=14)['ADX_14'].iloc[-1]
+        ema_fast = ta.ema(df['close'], length=TREND_EMA_FAST).iloc[-1]
+        ema_slow = ta.ema(df['close'], length=TREND_EMA_SLOW).iloc[-1]
+        sep = abs((ema_fast - ema_slow) / (ema_slow + 1e-9))
+        # pyramid if trend momentum decent and ADX indicates trend
+        return adx >= 20 and sep >= 0.0015
+    except Exception:
+        return False

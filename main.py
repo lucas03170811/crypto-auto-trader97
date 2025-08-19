@@ -8,14 +8,14 @@ from config import (
 from exchange.binance_client import BinanceClient
 from risk.risk_mgr import plan_final_qty
 
-# 盡量不動你的策略：存在就用；沒有就略過
+# 策略模組（存在才匯入，不存在就跳過）
 try:
-    from strategies.trend import generate_trend_signal  # -> "BUY"/"SELL"/None
+    from strategies.trend import generate_trend_signal
 except Exception:
     def generate_trend_signal(*_, **__): return None
 
 try:
-    from strategies.revert import generate_revert_signal  # -> "BUY"/"SELL"/None
+    from strategies.revert import generate_revert_signal
 except Exception:
     def generate_revert_signal(*_, **__): return None
 
@@ -23,10 +23,9 @@ except Exception:
 async def main():
     print("[BOOT] Starting scanner...")
 
-    # 支援 main.py 傳 testnet=... 的舊寫法
     client = BinanceClient(testnet=TESTNET)
 
-    # 槓桿初始化（失敗不致命）
+    # 設定槓桿
     for s in SYMBOL_POOL:
         try:
             client.set_leverage(s, LEVERAGE)
@@ -41,24 +40,43 @@ async def main():
             print(f"[ERROR] get_price {symbol}: {e}")
             continue
 
-        # 產生訊號（任何一個策略回覆 "BUY"/"SELL" 即採用；都沒有就跳過）
-        side = generate_trend_signal(symbol=symbol) or generate_revert_signal(symbol=symbol)
+        # --- 呼叫策略，支援舊版/新版 ---
+        side = None
+        try:
+            side = generate_trend_signal(symbol=symbol)
+        except TypeError:
+            try:
+                side = generate_trend_signal(symbol)
+            except Exception:
+                pass
+
+        if not side:
+            try:
+                side = generate_revert_signal(symbol=symbol)
+            except TypeError:
+                try:
+                    side = generate_revert_signal(symbol)
+                except Exception:
+                    pass
+
         if side not in ("BUY", "SELL"):
             if DEBUG_MODE:
                 print(f"[SKIP] {symbol} 無交易訊號")
             continue
 
+        # --- 數量計算 ---
         qty = plan_final_qty(client, symbol, price)
         if not qty or qty <= 0:
             if DEBUG_MODE:
                 print(f"[SKIP] {symbol} 無法得到有效數量")
             continue
 
-        # 最終下單
+        # --- 下單 ---
         client.order_market(symbol, side, qty)
-        await asyncio.sleep(0.2)  # 稍微降頻，避免打太快
+        await asyncio.sleep(0.2)  # 降頻，避免過快觸發 API 限制
 
     print("[DONE] 掃描完成")
+
 
 if __name__ == "__main__":
     asyncio.run(main())

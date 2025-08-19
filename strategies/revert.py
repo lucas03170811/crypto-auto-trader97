@@ -1,22 +1,20 @@
 # strategies/revert.py
-from config import REVERT_RSI_OVERBOUGHT, REVERT_RSI_OVERSOLD
+import pandas as pd
+import pandas_ta as ta
 
-def _rsi(close, period=14):
-    delta = close.diff()
-    gain = delta.clip(lower=0.0)
-    loss = -delta.clip(upper=0.0)
-    avg_gain = gain.ewm(alpha=1/period, min_periods=period).mean()
-    avg_loss = loss.ewm(alpha=1/period, min_periods=period).mean()
-    rs = avg_gain / (avg_loss.replace(0, 1e-12))
-    rsi = 100 - (100 / (1 + rs))
-    return rsi
-
-def generate_revert_signal(df):
-    if df is None or df.empty:
+def generate_revert_signal(df: pd.DataFrame):
+    if df is None or len(df) < 30:
         return None
-    rsi = _rsi(df["close"])
-    if rsi.iloc[-1] <= REVERT_RSI_OVERSOLD:
-        return "LONG"
-    if rsi.iloc[-1] >= REVERT_RSI_OVERBOUGHT:
-        return "SHORT"
+
+    rsi = ta.rsi(df['close'], length=14).iloc[-1]
+    bb = ta.bbands(df['close'], length=20, std=2)
+    lower = bb['BBL_20_2.0'].iloc[-1]
+    upper = bb['BBU_20_2.0'].iloc[-1]
+    price = df['close'].iloc[-1]
+
+    # 放寬門檻：rsi < 40 & price < lower => long, rsi>60 & price>upper => short
+    if rsi < 40 and price < lower:
+        return 'long'
+    if rsi > 60 and price > upper:
+        return 'short'
     return None

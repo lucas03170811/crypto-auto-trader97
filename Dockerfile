@@ -2,13 +2,17 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# 先裝套件
-COPY requirements.txt .
-RUN pip install --upgrade pip \
- && pip install --no-cache-dir -r requirements.txt
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    wget \
+    git \
+    && apt-get clean
 
-# 再複製專案
+COPY requirements.txt .
+RUN pip install --upgrade pip
+RUN pip install --no-cache-dir -r requirements.txt
+
 COPY . .
 
-# Railway 預設入口（也可在 Railway 直接設定）
+ENV PYTHONUNBUFFERED=1
 CMD ["python", "main.py"]

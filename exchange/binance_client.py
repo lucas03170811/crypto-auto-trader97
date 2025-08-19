@@ -1,3 +1,4 @@
+# exchange/binance_client.py
 import os
 import asyncio
 import traceback
@@ -8,34 +9,27 @@ from binance.um_futures import UMFutures
 
 getcontext().prec = 28
 
-
 def D(x) -> Decimal:
     return Decimal(str(x))
-
 
 class BinanceClient:
     def __init__(self, api_key=None, api_secret=None, testnet=False, dual_side=False):
         key = api_key or os.getenv("BINANCE_API_KEY")
         secret = api_secret or os.getenv("BINANCE_API_SECRET")
         base = "https://testnet.binancefuture.com" if testnet else "https://fapi.binance.com"
-
         self.client = UMFutures(key=key, secret=secret, base_url=base)
-        self.symbol_meta = {}  # { "BTCUSDT": {"min_notional":D, "step":D, "min_qty":D, "tick":D} }
+        self.symbol_meta = {}
         self.dual_side = dual_side
+        # 同步抓一次 exchange_info（若失敗則使用預設）
+        try:
+            self._bootstrap_sync()
+        except Exception as e:
+            print(f"[WARN] bootstrap exchange info fail: {e}")
 
-        # 初始化：同步一次交易所規則 & 倉位模式
-        self._bootstrap_sync()
-
-    # ---------- 基礎工具 ----------
+    # ---------- util ----------
     async def _run(self, fn, *args, **kwargs):
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(None, lambda: fn(*args, **kwargs))
-
-    def _floor_to_step(self, qty: Decimal, step: Decimal) -> Decimal:
-        if step <= 0:
-            return qty
-        steps = (qty / step).to_integral_value(rounding=ROUND_DOWN)
-        return steps * step
 
     def _ceil_to_step(self, qty: Decimal, step: Decimal) -> Decimal:
         if step <= 0:
@@ -43,101 +37,105 @@ class BinanceClient:
         steps = (qty / step).to_integral_value(rounding=ROUND_UP)
         return steps * step
 
-    # ---------- 啟動時拉取交易所規則 ----------
+    def _floor_to_step(self, qty: Decimal, step: Decimal) -> Decimal:
+        if step <= 0:
+            return qty
+        steps = (qty / step).to_integral_value(rounding=ROUND_DOWN)
+        return steps * step
+
+    def _meta_precimals(self, step: Decimal) -> int:
+        # 計算 stepSize 小數位數，例如 0.001 -> 3
+        s = format(step.normalize(), 'f')
+        if '.' in s:
+            return len(s.split('.')[1])
+        return 0
+
+    # ---------- bootstrap ----------
     def _bootstrap_sync(self):
-        # 1) 交易對規則
-        try:
-            info = self.client.exchange_info()
-            for s in info.get("symbols", []):
-                sym = s.get("symbol")
-                filters = {f["filterType"]: f for f in s.get("filters", [])}
-                lot = filters.get("LOT_SIZE", {})
-                pricef = filters.get("PRICE_FILTER", {})
-                min_notional_f = filters.get("MIN_NOTIONAL", {})
-
-                step = D(lot.get("stepSize", "0"))
-                min_qty = D(lot.get("minQty", "0"))
-                tick = D(pricef.get("tickSize", "0"))
-                # 一些合約沒有給 notional，給預設 5
-                min_notional = D(min_notional_f.get("notional", "5"))
-
-                self.symbol_meta[sym] = {
-                    "step": step,
-                    "min_qty": min_qty,
-                    "tick": tick,
-                    "min_notional": min_notional,
-                }
-        except Exception as e:
-            print(f"[WARN] 無法拉取 exchange_info：{e}，將使用預設門檻（minNotional=5）")
-
-        # 2) 預設用「單向倉」避免 -4061，若你需要雙向倉請把 dual_side=True
+        info = self.client.exchange_info()
+        for s in info.get("symbols", []):
+            sym = s.get("symbol")
+            filters = {f["filterType"]: f for f in s.get("filters", [])}
+            lot = filters.get("LOT_SIZE", {})
+            pricef = filters.get("PRICE_FILTER", {})
+            mn = filters.get("MIN_NOTIONAL", {})
+            step = D(lot.get("stepSize", "0"))
+            min_qty = D(lot.get("minQty", "0"))
+            tick = D(pricef.get("tickSize", "0"))
+            min_notional = D(mn.get("notional", "5"))
+            self.symbol_meta[sym] = {
+                "step": step,
+                "min_qty": min_qty,
+                "tick": tick,
+                "min_notional": min_notional,
+                "prec": self._meta_precimals(step),
+            }
+        # 切換倉位模式（盡量設單向或雙向依你設定）
         try:
             self.client.change_position_mode(dualSidePosition="true" if self.dual_side else "false")
-        except Exception as e:
-            # 有些帳戶/權限不能切，忽略即可
-            print(f"[WARN] change_position_mode 失敗：{e}")
+        except Exception:
+            pass
 
-    # ---------- 查詢 symbol 規則 ----------
-    def get_symbol_meta(self, symbol: str) -> dict:
+    def get_symbol_meta(self, symbol: str):
         return self.symbol_meta.get(symbol, {
             "step": D("0.0001"),
             "min_qty": D("0.0001"),
             "tick": D("0.01"),
             "min_notional": D("5"),
+            "prec": 4
         })
 
-    def get_min_notional(self, symbol: str) -> Decimal:
+    def get_min_notional(self, symbol: str):
         return self.get_symbol_meta(symbol)["min_notional"]
 
-    # ---------- K 線 ----------
+    # ---------- market data ----------
     async def get_klines(self, symbol, interval="15m", limit=100):
         try:
-            # 先用位置參數（新版本）
             res = await self._run(self.client.klines, symbol, interval, limit)
         except TypeError:
-            # 舊版本 signature
             res = await self._run(self.client.klines, symbol=symbol, interval=interval, limit=limit)
         except Exception as e:
             print(f"[ERROR] Failed to fetch klines for {symbol}: {e}")
             return None
-
         try:
             df = pd.DataFrame(res, columns=[
-                "timestamp", "open", "high", "low", "close", "volume",
-                "close_time", "quote_asset_volume", "num_trades",
-                "taker_buy_base_vol", "taker_buy_quote_vol", "ignore"
+                "timestamp","open","high","low","close","volume",
+                "close_time","quote_asset_volume","num_trades",
+                "taker_buy_base_vol","taker_buy_quote_vol","ignore"
             ])
         except Exception:
             df = pd.DataFrame(res)
-
-        for col in ("close", "high", "low", "volume"):
+        for col in ("close","high","low","volume"):
             if col in df.columns:
                 df[col] = pd.to_numeric(df[col], errors="coerce")
         return df
 
-    # ---------- 價格（多來源容錯） ----------
     async def get_price(self, symbol):
-        # 1) ticker_price
+        # 嘗試多個 endpoint（容錯）
         try:
-            tick = await self._run(self.client.ticker_price, symbol)
-            if isinstance(tick, dict) and "price" in tick:
-                return float(tick["price"])
-            if isinstance(tick, list):
-                for t in tick:
-                    if t.get("symbol") == symbol and "price" in t:
-                        return float(t["price"])
+            t = await self._run(self.client.ticker_price, symbol)
+            # tick 可能為 dict / list / string
+            if isinstance(t, dict) and "price" in t:
+                return float(t["price"])
+            if isinstance(t, (list, tuple)):
+                for e in t:
+                    if isinstance(e, dict) and e.get("symbol") == symbol and "price" in e:
+                        return float(e["price"])
+            if isinstance(t, str) or isinstance(t, (int,float)):
+                try:
+                    return float(t)
+                except Exception:
+                    pass
         except Exception:
             pass
-
-        # 2) mark_price
+        # fallback mark price
         try:
             mk = await self._run(self.client.mark_price, symbol)
             if isinstance(mk, dict) and "markPrice" in mk:
                 return float(mk["markPrice"])
         except Exception:
             pass
-
-        # 3) 24hr ticker
+        # fallback 24hr ticker
         try:
             t24 = await self._run(self.client.ticker_24hr, symbol)
             if isinstance(t24, dict):
@@ -148,10 +146,10 @@ class BinanceClient:
         except Exception:
             pass
 
-        print(f"[ERROR] get_price {symbol}: 無法取得價格")
+        print(f"[ERROR] get_price {symbol}: 無法取得價格 or key missing")
         return 0.0
 
-    # ---------- 餘額 / 持倉 ----------
+    # ---------- account ----------
     async def get_equity(self):
         try:
             bal = await self._run(self.client.balance)
@@ -180,8 +178,8 @@ class BinanceClient:
             print(f"[ERROR] get_position {symbol}: {e}")
         return 0.0
 
-    # ---------- 數量修正：對齊 minNotional / stepSize ----------
-    def adjust_quantity(self, symbol: str, target_notional_usdt: float, price: float) -> Decimal:
+    # ---------- qty adjust & format ----------
+    def adjust_quantity(self, symbol: str, target_notional_usdt: Decimal, price: Decimal) -> Decimal:
         meta = self.get_symbol_meta(symbol)
         step = meta["step"]
         min_qty = meta["min_qty"]
@@ -190,48 +188,78 @@ class BinanceClient:
         if price <= 0:
             return D("0")
 
-        notional = D(target_notional_usdt)
-        if notional < min_notional:
-            notional = min_notional  # 補到最小名目
+        # Make sure target notional as Decimal
+        target_notional = D(target_notional_usdt)
+        if target_notional < min_notional:
+            target_notional = min_notional
 
-        raw_qty = notional / D(price)
-
-        # 先向上補量，確保至少達到最小名目，再用 step 對齊
+        raw_qty = (target_notional / D(price))
+        # ceil to step so that notional >= target_notional
         qty = self._ceil_to_step(raw_qty, step)
         if qty < min_qty:
             qty = min_qty
 
-        # 再次確認補完後是否仍達標
+        # Final safety check: if still not reach min_notional, increase
         if (D(price) * qty) < min_notional:
-            need = min_notional / D(price)
+            need = (min_notional / D(price))
             qty = self._ceil_to_step(need, step)
+            if qty < min_qty:
+                qty = min_qty
 
-        # 防止極端情況為 0
+        # If qty still zero or extremely small -> cancel
         if qty <= 0:
-            print(f"[ADJUST] {symbol} qty 對齊後仍為 0（step={step} / min_qty={min_qty}），取消下單")
+            print(f"[ADJUST] {symbol} qty 對齊後為 0，取消下單（step={step})")
+            return D("0")
+
+        # Quantize to allowed decimal places (avoid precision error)
+        prec = meta.get("prec", self._meta_precimals(step))
+        quant = Decimal(1).scaleb(-prec)  # e.g. prec=3 -> Decimal('0.001')
+        try:
+            qty = qty.quantize(quant, rounding=ROUND_DOWN)  # ensure not exceed allowed precision
+            # After rounding down, make sure notional still >= min_notional; if not, then ceil up one step
+            if (D(price) * qty) < min_notional:
+                qty = self._ceil_to_step(qty + quant, step)
+        except Exception:
+            pass
+
+        if qty <= 0:
+            print(f"[ADJUST] {symbol} qty 結果為 0 (after quantize) -> cancel")
             return D("0")
 
         return qty
 
-    # ---------- 下單（預設單向倉，不送 positionSide） ----------
-    async def open_long(self, symbol, qty):
+    def _format_qty(self, qty: Decimal, symbol: str) -> str:
+        meta = self.get_symbol_meta(symbol)
+        prec = meta.get("prec", 8)
+        fmt = f"{{0:.{prec}f}}"
+        # Avoid scientific notation: format into fixed decimals, then strip trailing zeros
+        s = fmt.format(float(qty))
+        s = s.rstrip('0').rstrip('.') if '.' in s else s
+        return s
+
+    # ---------- orders ----------
+    async def open_long(self, symbol, qty: Decimal):
         try:
+            qty_s = self._format_qty(qty, symbol)
             resp = await self._run(self.client.new_order,
-                                   symbol=symbol, side="BUY", type="MARKET", quantity=str(qty))
-            print(f"[ORDER OK] LONG {symbol} qty={qty} resp={resp}")
+                                   symbol=symbol, side="BUY", type="MARKET", quantity=qty_s)
+            print(f"[ORDER OK] LONG {symbol} qty={qty_s} resp={resp}")
             return resp
         except Exception as e:
             print(f"[ERROR] order {symbol}: {e}")
+            traceback.print_exc()
             return None
 
-    async def open_short(self, symbol, qty):
+    async def open_short(self, symbol, qty: Decimal):
         try:
+            qty_s = self._format_qty(qty, symbol)
             resp = await self._run(self.client.new_order,
-                                   symbol=symbol, side="SELL", type="MARKET", quantity=str(qty))
-            print(f"[ORDER OK] SHORT {symbol} qty={qty} resp={resp}")
+                                   symbol=symbol, side="SELL", type="MARKET", quantity=qty_s)
+            print(f"[ORDER OK] SHORT {symbol} qty={qty_s} resp={resp}")
             return resp
         except Exception as e:
             print(f"[ERROR] order {symbol}: {e}")
+            traceback.print_exc()
             return None
 
     async def close(self):

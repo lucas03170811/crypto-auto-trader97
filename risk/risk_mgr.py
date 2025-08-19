@@ -1,50 +1,44 @@
-# risk/risk_mgr.py
-import os
-from decimal import Decimal
-from config import BASE_QTY  # BASE_QTY 表示每次目標的 USDT 名目值，例如 20
-from decimal import Decimal
+from __future__ import annotations
+from typing import Optional
+from config import DESIRED_TRADE_USD_DEFAULT, DEBUG_MODE
 
-class RiskManager:
-    def __init__(self, client, base_qty_usdt=None):
-        self.client = client
-        # base_qty_usdt：每次想下單的目標 USDT (notional)
-        self.base_qty_usdt = Decimal(str(base_qty_usdt)) if base_qty_usdt is not None else Decimal(str(BASE_QTY))
+def plan_final_qty(
+    client,
+    symbol: str,
+    price: float,
+    desired_usd: float | None = None,
+) -> Optional[float]:
+    """
+    回傳「最終可下單數量」；若資金不足或規則取不到則回傳 None
+    規則：
+      1) 先用 desired_usd（預設 6U）換算 qty
+      2) 再強制拉到 minNotional（向上對齊 stepSize）
+      3) 若可用 USDT 不足以覆蓋 minNotional，則跳過
+    """
+    try:
+        f = client.get_symbol_filters(symbol)
+        step = f["step_size"]
+        min_notional = f["min_notional"]
+    except Exception as e:
+        if DEBUG_MODE:
+            print(f"[WARN] 取不到 {symbol} 規則：{e}")
+        return None
 
-    async def execute_trade(self, symbol, signal):
-        """
-        signal: 'long' or 'short'
-        執行下單：先計算 qty（考慮 step/minNotional），再呼叫 client 開倉。
-        """
-        signal = signal.lower()
-        position = await self.client.get_position(symbol)
-        print(f"[Position] {symbol}: {position}")
+    if price <= 0:
+        return None
 
-        # 只在無倉位時進場（你可以改邏輯）
-        if position != 0:
-            print(f"[SKIP] {symbol} already has position")
-            return
+    target_usd = float(desired_usd or DESIRED_TRADE_USD_DEFAULT)
+    qty = target_usd / price
 
-        # 計算 qty（回傳 Decimal qty 與實際 notional）
-        qty, notional, info = await self.client.calc_qty_from_usdt(symbol, self.base_qty_usdt)
-        if qty is None or qty == 0:
-            print(f"[SKIP ORDER] {symbol} 名目價值/數量無法對齊或為 0 (notional={notional})")
-            return
+    # 拉到滿足最小名目 + 向上對齊
+    qty = client.ensure_min_notional(qty, price, min_notional, step)
 
-        min_not = info.get("minNotional")
-        if min_not:
-            min_not_d = Decimal(str(min_not))
-            if Decimal(str(notional)) < min_not_d:
-                print(f"[SKIP ORDER] {symbol} 名目價值 {notional} 低於 minNotional {min_not_d}")
-                return
+    # 檢查資金是否能 cover「至少」min_notional
+    need_usd = max(target_usd, min_notional)
+    free = client.get_available_usdt()
+    if free < need_usd:
+        if DEBUG_MODE:
+            print(f"[SKIP] {symbol} 可用USDT不足：free={free:.4f} < need={need_usd:.4f}")
+        return None
 
-        print(f"[Trade] Entering {signal.upper()} {symbol} — qty={qty} notional={notional}")
-
-        try:
-            if signal == "long":
-                await self.client.open_long(symbol, qty)
-            elif signal == "short":
-                await self.client.open_short(symbol, qty)
-            else:
-                print(f"[ERROR] Unknown signal {signal}")
-        except Exception as e:
-            print(f"[TRADE ERROR] {symbol}: {e}")
+    return qty

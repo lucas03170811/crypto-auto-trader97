@@ -30,13 +30,13 @@ print(f"API_KEY： ✅ 已讀取")
 print(f"API_SECRET： ✅ 已讀取")
 
 # 槓桿（若策略/下單前要動態設定，可在 main 內逐幣種呼叫）
-LEVERAGE = int(os.getenv("LEVERAGE", "10"))
+LEVERAGE = int(os.getenv("LEVERAGE", "30"))
 
 # 交易幣種池
 SYMBOL_POOL = [
     "BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT", "ADAUSDT",
-    "DOGEUSDT", "LINKUSDT", "AVAXUSDT", "MATICUSDT",
-    "SUIUSDT", "SEIUSDT", "1000PEPEUSDT", "1000BONKUSDT",
+    "DOGEUSDT", "LINKUSDT", "AVAXUSDT", "1000BONKUSDT",
+    "SUIUSDT", "SEIUSDT", "1000PEPEUSDT", 
 ]
 print(f"交易幣種數量: {len(SYMBOL_POOL)}")
 

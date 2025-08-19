@@ -1,17 +1,17 @@
 # engine/hedge_engine.py
 import asyncio
-from strategies.signal_generator import SignalGenerator
-from risk.risk_mgr import RiskManager
+from strategies.filter import filter_symbols
+from strategies.trend import generate_trend_signal, should_pyramid
+from strategies.revert import generate_revert_signal
 
 class HedgeEngine:
-    def __init__(self, client):
+    def __init__(self, client, risk_mgr):
         self.client = client
-        self.signal_gen = SignalGenerator(client)
-        self.risk_mgr = RiskManager(client)
+        self.risk_mgr = risk_mgr
 
     async def run(self):
         print("[Engine] Running scan...")
-        symbols = await self.signal_gen.get_filtered_symbols()
+        symbols = await filter_symbols(self.client)
         print(f"[Engine] Filtered: {symbols}")
 
         for symbol in symbols:
@@ -20,7 +20,10 @@ class HedgeEngine:
                 print(f"[SKIP] No valid data for {symbol}")
                 continue
 
-            signal = await self.signal_gen.generate_signal(symbol)
+            trend_sig = generate_trend_signal(df)
+            revert_sig = generate_revert_signal(df)
+            signal = trend_sig or revert_sig
+
             if signal:
                 print(f"[SIGNAL] {symbol} -> {signal}")
                 await self.risk_mgr.execute_trade(symbol, signal)

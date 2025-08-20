@@ -1,20 +1,20 @@
-# strategies/revert.py
 import pandas as pd
 import pandas_ta as ta
+from config import RSI_LEN, BB_LEN, BB_STD, RSI_BUY, RSI_SELL
 
 def generate_revert_signal(df: pd.DataFrame):
-    if df is None or len(df) < 30:
-        return None
+    """
+    反轉策略：RSI + 布林
+    回傳: "BUY" / "SELL" / None
+    """
+    df["rsi"] = ta.rsi(df["close"], length=RSI_LEN)
+    bb = ta.bbands(df["close"], length=BB_LEN, std=BB_STD)
+    df["bbl"] = bb[f"BBL_{BB_LEN}_{BB_STD}"]
+    df["bbu"] = bb[f"BBU_{BB_LEN}_{BB_STD}"]
 
-    rsi = ta.rsi(df['close'], length=14).iloc[-1]
-    bb = ta.bbands(df['close'], length=20, std=2)
-    lower = bb['BBL_20_2.0'].iloc[-1]
-    upper = bb['BBU_20_2.0'].iloc[-1]
-    price = df['close'].iloc[-1]
-
-    # 放寬門檻：rsi < 40 & price < lower => long, rsi>60 & price>upper => short
-    if rsi < 40 and price < lower:
-        return 'long'
-    if rsi > 60 and price > upper:
-        return 'short'
+    last = df.iloc[-1]
+    if last["rsi"] < RSI_BUY and last["close"] < last["bbl"]:
+        return "BUY"
+    if last["rsi"] > RSI_SELL and last["close"] > last["bbu"]:
+        return "SELL"
     return None

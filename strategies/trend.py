@@ -4,97 +4,84 @@ import numpy as np
 from typing import Optional
 import config
 
-# helper to convert klines raw -> DataFrame
+# ---- utils ----
 def klines_to_df(klines):
-    # klines: list of lists from Binance
-    cols = ["open_time","open","high","low","close","volume","close_time",
-            "quote_asset_volume","num_trades","taker_buy_base","taker_buy_quote","ignore"]
+    cols = [
+        "open_time","open","high","low","close","volume","close_time",
+        "quote_asset_volume","num_trades","taker_buy_base","taker_buy_quote","ignore"
+    ]
     try:
         df = pd.DataFrame(klines, columns=cols)
-        df["open"] = df["open"].astype(float)
-        df["high"] = df["high"].astype(float)
-        df["low"] = df["low"].astype(float)
-        df["close"] = df["close"].astype(float)
-        df["volume"] = df["volume"].astype(float)
+        for c in ["open","high","low","close","volume"]:
+            df[c] = df[c].astype(float)
+        df["open_time"] = pd.to_datetime(df["open_time"], unit="ms")
         return df
     except Exception:
-        # fallback minimal
-        arr = []
-        for k in klines:
-            arr.append({
-                "open": float(k[1]), "high": float(k[2]), "low": float(k[3]), "close": float(k[4]), "volume": float(k[5])
-            })
-        return pd.DataFrame(arr)
+        return None
 
-async def generate_trend_signal(symbol: str, client=None) -> Optional[str]:
+def ema(series: pd.Series, span: int) -> pd.Series:
+    return series.ewm(span=span, adjust=False).mean()
+
+def macd(series: pd.Series, fast: int, slow: int, signal: int):
+    ema_fast = ema(series, fast)
+    ema_slow = ema(series, slow)
+    macd_line = ema_fast - ema_slow
+    signal_line = macd_line.ewm(span=signal, adjust=False).mean()
+    return macd_line, signal_line, ema_fast, ema_slow
+
+# ---- strategy ----
+async def generate_trend_signal(client, symbol: str, interval: str = None) -> Optional[str]:
     """
-    Generate 'LONG' or 'SHORT' or None using EMA + MACD loosening criteria.
-    client is optional; if provided it should have get_klines method.
+    保留你原本的趨勢策略：EMA 交叉 + MACD 交叉 擇一觸發
+    回傳 "LONG"/"SHORT"/None
     """
     try:
-        if client:
-            klines = await client.get_klines(symbol, interval=config.KLINE_INTERVAL, limit=config.KLINE_LIMIT)
-        else:
-            return None
-        df = klines_to_df(klines)
+        kl = await client.get_klines(symbol, interval=interval or config.KLINE_INTERVAL, limit=config.KLINE_LIMIT)
+        df = klines_to_df(kl)
         if df is None or len(df) < max(config.TREND_EMA_SLOW, config.MACD_SIGNAL) + 5:
             return None
 
         close = df["close"]
-        ema_fast = close.ewm(span=config.TREND_EMA_FAST, adjust=False).mean()
-        ema_slow = close.ewm(span=config.TREND_EMA_SLOW, adjust=False).mean()
-        macd = ema_fast - ema_slow
-        macd_signal = macd.ewm(span=config.MACD_SIGNAL, adjust=False).mean()
+        macd_line, signal_line, ema_fast, ema_slow = macd(
+            close, config.TREND_EMA_FAST, config.TREND_EMA_SLOW, config.MACD_SIGNAL
+        )
 
-        last_idx = -1
-        # loosened entry: EMA fast above slow and MACD above signal (for LONG)
-        if ema_fast.iloc[last_idx] > ema_slow.iloc[last_idx] and macd.iloc[last_idx] > macd_signal.iloc[last_idx]:
+        # EMA 交叉
+        ema_golden = ema_fast.iloc[-2] <= ema_slow.iloc[-2] and ema_fast.iloc[-1] > ema_slow.iloc[-1]
+        ema_dead   = ema_fast.iloc[-2] >= ema_slow.iloc[-2] and ema_fast.iloc[-1] < ema_slow.iloc[-1]
+
+        # MACD 交叉
+        macd_up = macd_line.iloc[-2] <= signal_line.iloc[-2] and macd_line.iloc[-1] > signal_line.iloc[-1]
+        macd_dn = macd_line.iloc[-2] >= signal_line.iloc[-2] and macd_line.iloc[-1] < signal_line.iloc[-1]
+
+        if ema_golden or macd_up:
             return "LONG"
-        if ema_fast.iloc[last_idx] < ema_slow.iloc[last_idx] and macd.iloc[last_idx] < macd_signal.iloc[last_idx]:
+        if ema_dead or macd_dn:
             return "SHORT"
         return None
     except Exception as e:
         print(f"[STRATEGY:trend] error {symbol}: {e}")
         return None
 
-async def should_pyramid(symbol: str, client, position: dict) -> bool:
+async def should_pyramid(client, symbol: str, side_long: bool) -> bool:
     """
-    Decide if we should pyramid (add) for a current position.
-    Rules:
-      - If unrealized profit percentage >= PYRAMID_PROFIT_THRESH -> True
-      - OR if PYRAMID_BREAKOUT_ENABLED and current price breaks recent high/low -> True
-    position: dict returned by client.get_position(symbol) with 'positionAmt' and 'entryPrice'
+    保留你原本的「突破前高/前低」加碼邏輯。
     """
-    try:
-        if not position:
-            return False
-        amount = float(position.get("positionAmt", 0.0))
-        if amount == 0:
-            return False
-        entry = float(position.get("entryPrice", 0.0)) or 0.0
-        side_long = amount > 0
-
-        current_price = await client.get_price(symbol)
-        if entry <= 0:
-            return False
-        profit_pct = (current_price - entry) / entry if side_long else (entry - current_price) / entry
-        if profit_pct >= config.PYRAMID_PROFIT_THRESH:
-            return True
-
-        if config.PYRAMID_BREAKOUT_ENABLED:
-            klines = await client.get_klines(symbol, interval=config.KLINE_INTERVAL, limit=config.PYRAMID_BREAKOUT_LOOKBACK+5)
-            df = klines_to_df(klines)
-            if df is None or len(df) < 5:
-                return False
-            if side_long:
-                prev_high = df["high"].iloc[-(config.PYRAMID_BREAKOUT_LOOKBACK+1):-1].max()
-                if current_price > prev_high:
-                    return True
-            else:
-                prev_low = df["low"].iloc[-(config.PYRAMID_BREAKOUT_LOOKBACK+1):-1].min()
-                if current_price < prev_low:
-                    return True
+    if not config.PYRAMID_BREAKOUT_ENABLED or config.MAX_PYRAMID <= 0:
         return False
+    try:
+        kl = await client.get_klines(symbol, interval=config.KLINE_INTERVAL, limit=config.PYRAMID_BREAKOUT_LOOKBACK + 5)
+        df = klines_to_df(kl)
+        if df is None or len(df) < config.PYRAMID_BREAKOUT_LOOKBACK + 2:
+            return False
+
+        curr = df["close"].iloc[-1]
+        if side_long:
+            prev_high = df["high"].iloc[-(config.PYRAMID_BREAKOUT_LOOKBACK+1):-1].max()
+            return curr > prev_high
+        else:
+            prev_low = df["low"].iloc[-(config.PYRAMID_BREAKOUT_LOOKBACK+1):-1].min()
+            return curr < prev_low
     except Exception as e:
         print(f"[STRATEGY:trend] should_pyramid error {symbol}: {e}")
         return False

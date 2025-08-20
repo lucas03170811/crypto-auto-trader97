@@ -1,67 +1,66 @@
+# config.py
 import os
+import sys
+from typing import List
 
-# ===== API 金鑰（Railway 變數名稱）=====
-API_KEY = os.getenv("BINANCE_API_KEY", "")
-API_SECRET = os.getenv("BINANCE_API_SECRET", "")
+print("===== [CONFIG DEBUG] 載入設定檔 =====")
 
-# ===== 交易環境 =====
-USE_TESTNET = False  # True=測試網, False=正式網
+# 支援多種 env var 名稱（Railway 可能用 BINANCE_API_KEY）
+API_KEY = os.getenv("API_KEY") or os.getenv("BINANCE_API_KEY") or os.getenv("BINANCE_KEY")
+API_SECRET = os.getenv("API_SECRET") or os.getenv("BINANCE_API_SECRET") or os.getenv("BINANCE_SECRET")
 
-# ===== 掃描節奏（秒）=====
-SCAN_INTERVAL_SEC = 60  # ← 每 60 秒掃描一次
+if not API_KEY or not API_SECRET:
+    print("[ERROR] 環境變數未設定。請在 Railway 設定 Environment Variables：API_KEY / API_SECRET (或 BINANCE_API_KEY / BINANCE_API_SECRET)")
+    # 退出會讓容器停止，避免無 API key 下單
+    sys.exit(1)
 
-# ===== 槓桿 =====
-LEVERAGE = 30  # ← 全部幣種套用（若幣種關閉，會自動跳過）
+print(f"API_KEY: {'✅ 已讀取' if API_KEY else '❌ 未讀取'}")
+print(f"API_SECRET: {'✅ 已讀取' if API_SECRET else '❌ 未讀取'}")
 
-# ===== 交易清單 =====
-SYMBOLS = [
-    "BTCUSDT","ETHUSDT","SOLUSDT","XRPUSDT","ADAUSDT","DOGEUSDT",
-    "LINKUSDT","AVAXUSDT","MATICUSDT","SUIUSDT","SEIUSDT",
-    "1000PEPEUSDT","1000BONKUSDT",
+# 基本掃描設定
+SCAN_INTERVAL = int(os.getenv("SCAN_INTERVAL", "60"))  # 每 60 秒掃描一次，可用 env var 調整
+
+# 交易池 (可更換)
+SYMBOL_POOL: List[str] = [
+    "BTCUSDT","ETHUSDT","SOLUSDT","XRPUSDT","ADAUSDT",
+    "DOGEUSDT","LINKUSDT","AVAXUSDT","1000BONKUSDT",
+    "SUIUSDT","SEIUSDT","1000PEPEUSDT", 
 ]
+print(f"交易幣種數量: {len(SYMBOL_POOL)}")
 
-# ===== 策略參數 =====
-# 趨勢（EMA + MACD）
-EMA_FAST = 12
-EMA_SLOW = 26
-MACD_SIGNAL = 9
+# 風控 & 下單設定
+EQUITY_RATIO = float(os.getenv("EQUITY_RATIO", "0.05"))   # 每次下單使用總資產比例 (預設 5%)
+BASE_ORDER_USD = float(os.getenv("BASE_ORDER_USD", "5.0"))  # 當 equity 太小時，補足的最小名目 (USD)
+MIN_NOTIONAL_USD = float(os.getenv("MIN_NOTIONAL_USD", "5.0"))  # 交易所要求最小名目 (常見 5)
+LEVERAGE = int(os.getenv("LEVERAGE", "30"))  # 設定槓桿倍數（合約）
+MAX_PYRAMID = int(os.getenv("MAX_PYRAMID", "8"))  # 最多加碼次數
 
-# 反轉（RSI + 布林）
-RSI_LEN = 14
-BB_LEN = 20
-BB_STD = 2.0
-RSI_BUY = 45
-RSI_SELL = 60
+# 加碼策略
+PYRAMID_PROFIT_THRESH = float(os.getenv("PYRAMID_PROFIT_THRESH", "0.4"))  # 40% 獲利時允許加碼
+PYRAMID_BREAKOUT_ENABLED = os.getenv("PYRAMID_BREAKOUT_ENABLED", "true").lower() in ("1","true","yes")
+PYRAMID_BREAKOUT_LOOKBACK = int(os.getenv("PYRAMID_BREAKOUT_LOOKBACK", "20"))  # 用於突破前高/低計算
 
-# ===== 風控／加碼參數 =====
-# 每個幣最小目標名目金額（USDT），名目不足會自動補到這個值
-MIN_NOTIONAL = {
-    "BTCUSDT": 100.0,
-    "ETHUSDT": 20.0,
-    "SOLUSDT": 10.0,
-    "XRPUSDT": 10.0,
-    "ADAUSDT": 10.0,
-    "DOGEUSDT": 5.0,
-    "LINKUSDT": 20.0,
-    "AVAXUSDT": 20.0,
-    "MATICUSDT": 10.0,
-    "SUIUSDT": 5.0,
-    "SEIUSDT": 5.0,
-    "1000PEPEUSDT": 5.0,
-    "1000BONKUSDT": 5.0,
-}
-DEFAULT_MIN_NOTIONAL = 5.0  # 找不到幣時的 fallback
+# 移動停利 & 固定停損
+TRAILING_GIVEBACK_PCT = float(os.getenv("TRAILING_GIVEBACK_PCT", "0.20"))  # 從高點回落 20% 則平倉
+MAX_LOSS_PCT = float(os.getenv("MAX_LOSS_PCT", "0.30"))  # 單筆最大虧損 30%
 
-# 加碼（同向）規則
-ADD_TRIGGER_PROFIT = 0.40   # 獲利 > 40% 加碼
-BREAKOUT_LOOKBACK = 10      # 突破最近 N 根高/低加碼
-MAX_PYRAMIDS = 8            # 最多加碼 8 次
-ADD_SIZE_MULTIPLIER = 1.0   # 每次加碼量 = 基礎下單量 * 這個倍數
+# K線與指標
+KLINE_INTERVAL = os.getenv("KLINE_INTERVAL", "5m")
+KLINE_LIMIT = int(os.getenv("KLINE_LIMIT", "200"))
 
-# 追蹤停利／停損
-TRAIL_GIVEBACK = 0.20       # 從峰值利潤回落 20% => 全平
-STOP_LOSS_PCT = -0.30       # 直接虧損 -30% => 全平
+# 趨勢策略參數
+TREND_EMA_FAST = int(os.getenv("TREND_EMA_FAST", "12"))
+TREND_EMA_SLOW = int(os.getenv("TREND_EMA_SLOW", "26"))
+MACD_SIGNAL = int(os.getenv("MACD_SIGNAL", "9"))
 
-# K 線拉取
-KLINE_INTERVAL = "1m"       # ← 每分鐘策略
-KLINE_LIMIT = 200
+# 反轉策略參數
+REVERT_RSI_PERIOD = int(os.getenv("REVERT_RSI_PERIOD", "14"))
+REVERT_RSI_OVERSOLD = int(os.getenv("REVERT_RSI_OVERSOLD", "40"))   # 放寬條件
+REVERT_RSI_OVERBOUGHT = int(os.getenv("REVERT_RSI_OVERBOUGHT", "60"))
+BOLL_WINDOW = int(os.getenv("BOLL_WINDOW", "20"))
+BOLL_STDDEV = float(os.getenv("BOLL_STDDEV", "2.0"))
+
+# 其它
+DEBUG_MODE = os.getenv("DEBUG_MODE", "true").lower() in ("1","true","yes")
+
+print("======================================")

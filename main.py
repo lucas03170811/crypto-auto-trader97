@@ -13,81 +13,54 @@ from filters.symbol_filter import shortlist
 from strategies.trend import generate_trend_signal, should_pyramid
 from strategies.revert import generate_revert_signal
 
-print("[BOOT] Starting scanner...")
-
-async def safe_call(func, *args, **kwargs):
-    try:
-        return await func(*args, **kwargs)
-    except Exception as e:
-        print(f"[SAFE_CALL] error {func}: {e}")
-        traceback.print_exc()
-        return None
-
 async def manage_symbol(client, rm, symbol):
     try:
-        # Ensure leverage set (best-effort)
-        try:
-            await client.change_leverage(symbol, LEVERAGE)
-        except Exception:
-            pass
+        # 設定槓桿（若已設定過，交易所會忽略）
+        await client.change_leverage(symbol, LEVERAGE)
 
-        # Decide signal: trend first then revert
-        signal = await generate_trend_signal(symbol, client)
-        if not signal:
-            signal = await generate_revert_signal(symbol, client)
-        if not signal:
+        trend = await generate_trend_signal(client, symbol)
+        revert = await generate_revert_signal(client, symbol)
+        sig = trend or revert
+
+        if not sig:
             print(f"[SKIP] {symbol} 無交易訊號")
             return
 
-        # check current position
-        pos = await client.get_position(symbol)
-        pos_amt = float(pos.get("positionAmt", 0.0)) if pos else 0.0
-
-        # if already position in same direction: consider pyramid
-        if pos_amt != 0:
-            # same side?
-            same_side = (pos_amt > 0 and signal == "LONG") or (pos_amt < 0 and signal == "SHORT")
-            if same_side:
-                # see if we should pyramid
-                if await should_pyramid(symbol, client, pos):
-                    print(f"[PYRAMID] {symbol} triggers pyramid")
-                    await rm.execute_trade(symbol, signal)
-                else:
-                    print(f"[HOLD] {symbol} already position and no pyramid condition")
-            else:
-                # opposite side: you may want to close first - for safety skip
-                print(f"[OPPOSITE] {symbol} has opposite position; skipping new entry")
+        print(f"[EXEC] {symbol} side={sig}")
+        res = await rm.execute_trade(symbol, sig)
+        if res:
+            print(f"[ORDER OK] {symbol}: {res}")
         else:
-            # no position -> open new
-            print(f"[ENTRY] {symbol} -> {signal}")
-            await rm.execute_trade(symbol, signal)
+            print(f"[ORDER FAIL] {symbol}")
+
+        # 依照你的設計：突破加碼
+        if await should_pyramid(client, symbol, side_long=(sig == "LONG")):
+            print(f"[PYRAMID] add one more unit {symbol}")
+            await rm.execute_trade(symbol, sig)
+
     except Exception as e:
-        print(f"[ERROR] manage_symbol {symbol}: {e}")
-        traceback.print_exc()
+        print(f"[ERROR] manage_symbol {symbol}: {e}\n{traceback.format_exc()}")
 
 async def scanner():
-    client = BinanceClient(API_KEY, API_SECRET)
+    client = BinanceClient(API_KEY, API_SECRET, testnet=False)  # 是否用 TESTNET 可改 config.TESTNET
     rm = RiskManager(client)
-
-    # initial shortlist
-    candidates = await shortlist(client, max_candidates=len(SYMBOL_POOL))
-    if not candidates:
-        candidates = SYMBOL_POOL[:6]
 
     while True:
         start = time.time()
-        # refresh shortlist periodically (optional)
         try:
             candidates = await shortlist(client, max_candidates=len(SYMBOL_POOL))
-        except Exception:
-            pass
-        tasks = []
-        for s in candidates:
-            tasks.append(manage_symbol(client, rm, s))
-        # run concurrently but protect each task
-        await asyncio.gather(*tasks, return_exceptions=True)
+        except Exception as e:
+            print(f"[ERROR] shortlist: {e}")
+            candidates = SYMBOL_POOL
+
+        try:
+            tasks = [ manage_symbol(client, rm, s) for s in candidates ]
+            await asyncio.gather(*tasks, return_exceptions=True)
+        except Exception as e:
+            print(f"[ERROR] scanner: {e}\n{traceback.format_exc()}")
+
         elapsed = time.time() - start
-        wait = max(1, SCAN_INTERVAL - elapsed)
+        wait = max(1, int(SCAN_INTERVAL - elapsed))
         await asyncio.sleep(wait)
 
 if __name__ == "__main__":

@@ -1,10 +1,13 @@
 # exchange/binance_client.py
 import asyncio
 from typing import Any, List, Optional, Dict
+from decimal import Decimal, ROUND_UP, ROUND_DOWN, getcontext
 import math
 import time
 
 from binance.um_futures import UMFutures
+
+getcontext().prec = 28
 
 print("[DEBUG] 正確版本 binance_client.py 被載入 ✅")
 
@@ -12,70 +15,67 @@ class BinanceClient:
     def __init__(self, api_key: str, api_secret: str, base_url: str = "https://fapi.binance.com", testnet: bool = False):
         if testnet:
             base_url = "https://testnet.binancefuture.com"
-        # 建構 SDK client
         self.client = UMFutures(api_key, api_secret, base_url=base_url)
 
     async def _run_sync(self, fn, *args, **kwargs):
         """Run blocking sync function in threadpool."""
         return await asyncio.to_thread(lambda: fn(*args, **kwargs))
 
-    async def _try_calls(self, fn, call_attempts):
-        """
-        helper: call different callables (lambdas) until one succeeds.
-        call_attempts: list of callables (no-arg functions) to run in thread.
-        """
+    async def _try_calls(self, callables):
+        """Try list of zero-arg callables until one succeeds, return result or raise last."""
         last_exc = None
-        for call in call_attempts:
+        for c in callables:
             try:
-                return await asyncio.to_thread(call)
+                return await asyncio.to_thread(c)
             except TypeError as e:
-                # 參數錯誤多半是簽名不同，嘗試下一種
                 last_exc = e
                 continue
             except Exception as e:
                 last_exc = e
-                # 其他錯誤也記錄，繼續嘗試
                 continue
-        # 所有嘗試都失敗時回傳 None 並印錯誤
         raise last_exc if last_exc is not None else Exception("Unknown call failure")
 
-    async def get_klines(self, symbol: str, interval: str = "5m", limit: int = 200) -> List[Any]:
-        """
-        Robust fetch klines: try multiple calling signatures because different SDK versions accept
-        different positional/keyword args.
-        Returns list of klines (or empty list on failure).
-        """
+    async def get_symbol_info(self, symbol: str) -> Optional[dict]:
+        """Get exchange_info and return symbol entry."""
         try:
-            fn = getattr(self.client, "klines", None)
-            attempts = []
-
-            # pattern 1: positional (symbol, interval, limit)
-            attempts.append(lambda: fn(symbol, interval, limit))
-
-            # pattern 2: positional with only symbol+interval (some SDKs don't accept limit)
-            attempts.append(lambda: fn(symbol, interval))
-
-            # pattern 3: keyword args (symbol=..., interval=..., limit=...)
-            attempts.append(lambda: fn(symbol=symbol, interval=interval, limit=limit))
-
-            # pattern 4: some SDK use get_klines name
-            alt = getattr(self.client, "get_klines", None)
-            if alt:
-                attempts.append(lambda: alt(symbol=symbol, interval=interval, limit=limit))
-                attempts.append(lambda: alt(symbol, interval, limit))
-
-            # pattern 5: try calling through client.klines with named limit arg 'limit' or 'limit='
-            attempts.append(lambda: fn(symbol=symbol, interval=interval, limit=limit))
-
-            res = await self._try_calls(fn, attempts)
-            return res if res is not None else []
+            fn = getattr(self.client, "exchange_info", None)
+            if not fn:
+                return None
+            data = await self._run_sync(fn)
+            if not data:
+                return None
+            symbols = data.get("symbols") or data.get("result") or []
+            for s in symbols:
+                if s.get("symbol") == symbol:
+                    return s
         except Exception as e:
-            print(f"[ERROR] get_klines {symbol}: {e}")
-            return []
+            print(f"[ERROR] Failed to get symbol info for {symbol}: {e}")
+        return None
+
+    async def _parse_filters(self, symbol_info: dict):
+        """Return dict with stepSize (Decimal) and min_notional (Decimal) if available."""
+        step_size = Decimal("0.0001")
+        min_notional = Decimal("5")  # safe default
+        try:
+            filters = symbol_info.get("filters", []) if symbol_info else []
+            for f in filters:
+                t = f.get("filterType") or f.get("type")
+                if t == "LOT_SIZE":
+                    step_size = Decimal(str(f.get("stepSize", step_size)))
+                # futures might use "MIN_NOTIONAL" or "NOTIONAL" etc
+                if t in ("MIN_NOTIONAL", "NOTIONAL", "NOTIONAL_FILTER"):
+                    # key could be minNotional or notional
+                    if "minNotional" in f:
+                        min_notional = Decimal(str(f.get("minNotional")))
+                    elif "notional" in f:
+                        min_notional = Decimal(str(f.get("notional")))
+        except Exception as e:
+            print(f"[WARN] _parse_filters error: {e}")
+        return {"step_size": step_size, "min_notional": min_notional}
 
     async def get_price(self, symbol: str) -> float:
+        """Return last price (float) or 0.0 on fail."""
         try:
-            # ticker_price may return dict or list
             fn = getattr(self.client, "ticker_price", None)
             if not fn:
                 return 0.0
@@ -88,63 +88,38 @@ class BinanceClient:
             print(f"[ERROR] get_price {symbol}: {e}")
         return 0.0
 
-    async def get_24h_stats(self, symbol: str) -> Optional[dict]:
-        # try several names used by different SDK versions
-        for name in ("ticker_24hr_price_change", "ticker_24hr", "ticker_24hr_price_change_statistics", "ticker_24hr"):
-            fn = getattr(self.client, name, None)
-            if not fn:
-                continue
-            try:
-                # try keyword style
-                try:
-                    return await self._run_sync(fn, symbol=symbol)
-                except TypeError:
-                    return await self._run_sync(fn, symbol, )
-            except Exception:
-                continue
-        return None
-
-    async def get_latest_funding_rate(self, symbol: str) -> Optional[float]:
-        try:
-            fn = getattr(self.client, "funding_rate", None)
-            if not fn:
-                return None
-            res = await self._run_sync(fn, symbol=symbol, limit=1)
-            if isinstance(res, list) and res:
-                return float(res[0].get("fundingRate", 0.0))
-        except Exception as e:
-            # fallback and log
-            try:
-                res = await self._run_sync(self.client.funding_rate, symbol)
-                if isinstance(res, dict):
-                    return float(res.get("lastFundingRate", 0.0))
-            except Exception:
-                pass
-            print(f"[ERROR] Failed to get funding rate for {symbol}: {e}")
-        return None
-
-    async def get_symbol_info(self, symbol: str) -> Optional[dict]:
-        try:
-            info = await self._run_sync(self.client.exchange_info)
-            if isinstance(info, dict) and "symbols" in info:
-                for s in info["symbols"]:
-                    if s.get("symbol") == symbol:
-                        return s
-        except Exception as e:
-            print(f"[ERROR] Failed to get symbol info for {symbol}: {e}")
-        return None
-
     async def get_position(self, symbol: str) -> dict:
+        """
+        Return position dict for symbol or {}.
+        This handles multiple SDK signatures for get_position_risk.
+        """
         try:
-            res = await self._run_sync(self.client.get_position_risk, symbol)
-            if isinstance(res, list):
-                for p in res:
-                    if p.get("symbol") == symbol:
-                        return p
-            if isinstance(res, dict) and res.get("symbol") == symbol:
-                return res
+            # try no-arg (most connectors return a list)
+            try:
+                pos_list = await self._run_sync(self.client.get_position_risk)
+            except TypeError:
+                # maybe requires no args but is a bound method that still needs call
+                try:
+                    pos_list = await self._run_sync(lambda: self.client.get_position_risk())
+                except Exception:
+                    # try passing symbol explicitly
+                    pos_list = await self._run_sync(lambda: self.client.get_position_risk(symbol))
+            except Exception:
+                # fallback try with symbol
+                pos_list = await self._run_sync(lambda: self.client.get_position_risk(symbol))
         except Exception as e:
             print(f"[ERROR] Failed to get position for {symbol}: {e}")
+            return {}
+
+        try:
+            if isinstance(pos_list, list):
+                for p in pos_list:
+                    if p.get("symbol") == symbol:
+                        return p
+            if isinstance(pos_list, dict) and pos_list.get("symbol") == symbol:
+                return pos_list
+        except Exception as e:
+            print(f"[WARN] parsing position list failed: {e}")
         return {}
 
     async def get_equity(self) -> float:
@@ -154,51 +129,110 @@ class BinanceClient:
                 for a in bal:
                     if a.get("asset") == "USDT":
                         return float(a.get("balance", 0.0))
-            if isinstance(bal, dict) and "totalWalletBalance" in bal:
-                return float(bal.get("totalWalletBalance", 0.0))
+            if isinstance(bal, dict):
+                # some responses contain totalWalletBalance etc
+                if "totalWalletBalance" in bal:
+                    return float(bal.get("totalWalletBalance", 0.0))
         except Exception as e:
             print(f"[ERROR] Failed to get equity: {e}")
         return 0.0
 
-    async def change_leverage(self, symbol: str, leverage: int):
-        for fn_name in ("change_leverage", "set_leverage", "changeInitialLeverage", "leverage"):
-            fn = getattr(self.client, fn_name, None)
-            if not fn:
-                continue
+    # helper: ceil qty to step_size
+    def _ceil_qty(self, raw_qty: Decimal, step_size: Decimal) -> Decimal:
+        if raw_qty <= 0:
+            return Decimal("0")
+        # number of steps (ceiling)
+        n = (raw_qty / step_size).to_integral_value(rounding=ROUND_UP)
+        return (n * step_size).normalize()
+
+    # helper: floor qty to step (if you prefer)
+    def _floor_qty(self, raw_qty: Decimal, step_size: Decimal) -> Decimal:
+        if raw_qty <= 0:
+            return Decimal("0")
+        n = (raw_qty / step_size).to_integral_value(rounding=ROUND_DOWN)
+        return (n * step_size).normalize()
+
+    async def place_market_order(self, symbol: str, side: str, qty: Optional[float] = None, target_notional: Optional[float] = None, max_retries: int = 1) -> Optional[dict]:
+        """
+        Place market order.
+        - If qty provided, we will align it to stepSize and ensure min_notional by increasing qty (ceil).
+        - If target_notional provided (USD), compute qty = target_notional / price and ceil to step size & min_notional.
+        - returns order dict or None on failure.
+        """
+        try:
+            symbol_info = await self.get_symbol_info(symbol)
+            filters = await self._parse_filters(symbol_info)
+            step_size = filters["step_size"]
+            min_notional = filters["min_notional"]
+
+            price = await self.get_price(symbol)
+            if price <= 0:
+                print(f"[ERROR] price invalid for {symbol}: {price}")
+                return None
+
+            # compute qty if target_notional given
+            if target_notional is not None:
+                raw_qty = Decimal(str(target_notional)) / Decimal(str(price))
+                qty_d = self._ceil_qty(raw_qty, step_size)
+            elif qty is not None:
+                qty_d = Decimal(str(qty))
+                # ceil to step to avoid too small
+                qty_d = self._ceil_qty(qty_d, step_size)
+            else:
+                print("[ERROR] place_market_order needs qty or target_notional")
+                return None
+
+            # ensure min_notional satisfied; if not, increase qty by steps until it's >= min_notional
+            notional = (qty_d * Decimal(str(price))).quantize(Decimal("0.00000001"))
+            attempts = 0
+            while notional < min_notional and attempts < 10:
+                # increase by one step
+                qty_d = qty_d + step_size
+                notional = (qty_d * Decimal(str(price))).quantize(Decimal("0.00000001"))
+                attempts += 1
+
+            if qty_d <= 0:
+                print(f"[WARN] {symbol} qty after align is 0, cancel order (step={step_size})")
+                return None
+
+            # format qty as string without scientific notation
+            qty_str = format(qty_d, 'f')
+
+            # try placing order
             try:
-                # many SDKs want symbol & leverage keyword
-                try:
-                    await self._run_sync(fn, symbol=symbol, leverage=leverage)
-                except TypeError:
-                    await self._run_sync(fn, symbol, leverage)
-                return True
+                res = await self._run_sync(self.client.new_order, symbol=symbol, side=side, type="MARKET", quantity=qty_str)
+                return res
             except Exception as e:
-                last_exc = e
-                continue
-        print(f"[WARN] failed to set leverage {symbol}: {locals().get('last_exc', None)}")
-        return False
-
-    async def new_order(self, symbol: str, side: str, quantity: float):
-        try:
-            return await self._run_sync(self.client.new_order, symbol=symbol, side=side, type="MARKET", quantity=quantity)
+                # if minNotional error, try increase a bit and retry up to max_retries
+                err = e
+                # naive retry: increment qty by one step and try again
+                for i in range(max_retries):
+                    qty_d = qty_d + step_size
+                    qty_str = format(qty_d, 'f')
+                    try:
+                        print(f"[WARN] retrying market order {symbol} with qty {qty_str} after error {err}")
+                        res = await self._run_sync(self.client.new_order, symbol=symbol, side=side, type="MARKET", quantity=qty_str)
+                        return res
+                    except Exception as e2:
+                        err = e2
+                print(f"[ERROR] Failed to place market order {symbol}: {err}")
+                return None
         except Exception as e:
-            # bubble up so caller can log more details
-            raise
-
-    async def open_long(self, symbol: str, qty: float):
-        try:
-            res = await self.new_order(symbol=symbol, side="BUY", quantity=qty)
-            print(f"[ORDER] Opened LONG {symbol} qty={qty} -> {res}")
-            return res
-        except Exception as e:
-            print(f"[ERROR] Failed to open LONG {symbol}: {e}")
+            print(f"[ERROR] place_market_order unexpected: {e}")
             return None
 
-    async def open_short(self, symbol: str, qty: float):
-        try:
-            res = await self.new_order(symbol=symbol, side="SELL", quantity=qty)
-            print(f"[ORDER] Opened SHORT {symbol} qty={qty} -> {res}")
-            return res
-        except Exception as e:
-            print(f"[ERROR] Failed to open SHORT {symbol}: {e}")
-            return None
+    async def open_long(self, symbol: str, qty: Optional[float] = None, target_notional: Optional[float] = None):
+        res = await self.place_market_order(symbol, "BUY", qty=qty, target_notional=target_notional)
+        if res:
+            print(f"[ORDER] Opened LONG {symbol} qty={qty or target_notional} -> {res}")
+        else:
+            print(f"[ERROR] Failed to open LONG {symbol}")
+        return res
+
+    async def open_short(self, symbol: str, qty: Optional[float] = None, target_notional: Optional[float] = None):
+        res = await self.place_market_order(symbol, "SELL", qty=qty, target_notional=target_notional)
+        if res:
+            print(f"[ORDER] Opened SHORT {symbol} qty={qty or target_notional} -> {res}")
+        else:
+            print(f"[ERROR] Failed to open SHORT {symbol}")
+        return res

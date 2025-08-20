@@ -1,4 +1,5 @@
 # exchange/binance_client.py
+import os
 import asyncio
 from typing import Optional, Dict, Any
 from decimal import Decimal, getcontext
@@ -11,17 +12,24 @@ getcontext().prec = 28
 class BinanceClient:
     """
     輕量 async 包裝 binance-futures-connector 的 UMFutures。
-    修復重點：補上 get_klines，並提供本專案其餘模組會用到的介面。
+    修復重點：
+    1) get_klines 使用「關鍵字參數」呼叫，避免位置參數錯誤。
+    2) 統一所有交易所呼叫都用關鍵字參數。
+    3) 以 asyncio.Semaphore 做併發限流，避免連線池爆滿。
     """
 
     def __init__(self, api_key: str, api_secret: str, testnet: bool = False):
         base_url = "https://testnet.binancefuture.com" if testnet else "https://fapi.binance.com"
         self.client = UMFutures(key=api_key, secret=api_secret, base_url=base_url)
+        # 併發上限（可用環境變數 BINANCE_MAX_CONCURRENCY 調整）
+        self._sem = asyncio.Semaphore(int(os.getenv("BINANCE_MAX_CONCURRENCY", "5")))
 
     # ---------- utils ----------
     async def _run(self, fn, *args, **kwargs):
-        loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(None, lambda: fn(*args, **kwargs))
+        # 所有對交易所的呼叫都經過限流
+        async with self._sem:
+            loop = asyncio.get_running_loop()
+            return await loop.run_in_executor(None, lambda: fn(*args, **kwargs))
 
     @staticmethod
     def _D(x) -> Decimal:
@@ -49,7 +57,7 @@ class BinanceClient:
 
     async def get_price(self, symbol: str) -> Optional[Decimal]:
         try:
-            res = await self._run(self.client.ticker_price, symbol)
+            res = await self._run(self.client.ticker_price, symbol=symbol)
             return self._D(res.get("price"))
         except Exception:
             return None
@@ -57,19 +65,25 @@ class BinanceClient:
     async def get_24h_stats(self, symbol: str) -> Optional[dict]:
         """給 shortlist 使用的 24hr 統計（含 quoteVolume）。"""
         try:
-            return await self._run(self.client.ticker_24hr, symbol)
+            return await self._run(self.client.ticker_24hr, symbol=symbol)
+        except Exception:
+            return None
+
+    async def get_premium_index(self, symbol: str) -> Optional[dict]:
+        """取得資金費等 premium index 資訊。"""
+        try:
+            return await self._run(self.client.premium_index, symbol=symbol)
         except Exception:
             return None
 
     # ---------- market data ----------
     async def get_klines(self, symbol: str, interval: str = None, limit: int = None):
         """
-        關鍵修復：補上 get_klines，對齊策略模組的呼叫。
-        回傳為 binance 原始 list[list]（策略會自行轉成 DataFrame）
+        關鍵修復：一律使用關鍵字參數呼叫 UMFutures.klines
         """
         interval = interval or config.KLINE_INTERVAL
         limit = limit or config.KLINE_LIMIT
-        return await self._run(self.client.klines, symbol, interval, limit)
+        return await self._run(self.client.klines, symbol=symbol, interval=interval, limit=limit)
 
     # ---------- account ----------
     async def get_equity(self) -> Decimal:
@@ -97,7 +111,6 @@ class BinanceClient:
                 stepSize = self._D(f.get("stepSize"))
                 minQty = self._D(f.get("minQty"))
             if ft == "MIN_NOTIONAL":
-                # 新舊欄位名稱兼容
                 minNotional = self._D(f.get("notional", f.get("minNotional", "0")))
         return stepSize, minQty, minNotional
 

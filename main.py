@@ -1,91 +1,97 @@
 # main.py
 import asyncio
 import time
-from typing import List
+import traceback
 
-# 請確保 config.py 會 export 這些名稱
-from config import API_KEY, API_SECRET, SYMBOL_POOL, DEBUG_MODE, EQUITY_RATIO
-
-# 正確路徑：strategies（注意不是 strategy）
-from strategies.trend import generate_trend_signal, should_pyramid
-from strategies.revert import generate_revert_signal
+from config import (
+    API_KEY, API_SECRET, SYMBOL_POOL, SCAN_INTERVAL, DEBUG_MODE,
+    LEVERAGE, MAX_PYRAMID, TRAILING_GIVEBACK_PCT, MAX_LOSS_PCT
+)
 from exchange.binance_client import BinanceClient
 from risk.risk_mgr import RiskManager
-from filters.symbol_filter import shortlist as shortlist_symbols
+from filters.symbol_filter import shortlist
+from strategies.trend import generate_trend_signal, should_pyramid
+from strategies.revert import generate_revert_signal
 
 print("[BOOT] Starting scanner...")
 
-async def scan_once(client, rm, symbols: List[str]):
-    print(f"[SCAN] shortlisted: {symbols}")
-    for sym in symbols:
-        print(f"[SCAN] {sym}")
-        # 產生訊號（先用趨勢策略，若沒訊號再用反轉）
-        signal = None
+async def safe_call(func, *args, **kwargs):
+    try:
+        return await func(*args, **kwargs)
+    except Exception as e:
+        print(f"[SAFE_CALL] error {func}: {e}")
+        traceback.print_exc()
+        return None
+
+async def manage_symbol(client, rm, symbol):
+    try:
+        # Ensure leverage set (best-effort)
         try:
-            signal = await generate_trend_signal(sym)  # 假設 generate_trend_signal 可以用 sym 作為唯一引數
-        except TypeError:
-            # 如果你的 generate_trend_signal 是 sync 就改成 await asyncio.to_thread(...)
-            try:
-                signal = generate_trend_signal(sym)
-            except Exception as e:
-                print(f"[WARN] trend signal error {sym}: {e}")
-                signal = None
-        except Exception as e:
-            print(f"[WARN] trend signal error {sym}: {e}")
-            signal = None
+            await client.change_leverage(symbol, LEVERAGE)
+        except Exception:
+            pass
 
+        # Decide signal: trend first then revert
+        signal = await generate_trend_signal(symbol, client)
         if not signal:
-            try:
-                signal = await generate_revert_signal(sym)
-            except TypeError:
-                try:
-                    signal = generate_revert_signal(sym)
-                except Exception as e:
-                    print(f"[WARN] revert signal error {sym}: {e}")
-                    signal = None
-            except Exception as e:
-                print(f"[WARN] revert signal error {sym}: {e}")
-                signal = None
-
+            signal = await generate_revert_signal(symbol, client)
         if not signal:
-            print(f"[SKIP] {sym} 無交易訊號")
-            continue
+            print(f"[SKIP] {symbol} 無交易訊號")
+            return
 
-        # 取得下單數量（RiskManager 應提供 get_order_qty）
-        qty = await rm.get_order_qty(sym)
-        if qty <= 0:
-            print(f"[RISK] qty too small: {sym}")
-            continue
+        # check current position
+        pos = await client.get_position(symbol)
+        pos_amt = float(pos.get("positionAmt", 0.0)) if pos else 0.0
 
-        # 根據 signal 下單（open_long / open_short）
-        try:
-            if signal == "LONG":
-                res = await client.open_long(sym, qty)
-                print(f"[ORDER] Long {sym}: {res}")
-            elif signal == "SHORT":
-                res = await client.open_short(sym, qty)
-                print(f"[ORDER] Short {sym}: {res}")
+        # if already position in same direction: consider pyramid
+        if pos_amt != 0:
+            # same side?
+            same_side = (pos_amt > 0 and signal == "LONG") or (pos_amt < 0 and signal == "SHORT")
+            if same_side:
+                # see if we should pyramid
+                if await should_pyramid(symbol, client, pos):
+                    print(f"[PYRAMID] {symbol} triggers pyramid")
+                    await rm.execute_trade(symbol, signal)
+                else:
+                    print(f"[HOLD] {symbol} already position and no pyramid condition")
             else:
-                print(f"[UNKNOWN SIGNAL] {sym} -> {signal}")
-        except Exception as e:
-            print(f"[ERROR] Failed to place order for {sym}: {e}")
+                # opposite side: you may want to close first - for safety skip
+                print(f"[OPPOSITE] {symbol} has opposite position; skipping new entry")
+        else:
+            # no position -> open new
+            print(f"[ENTRY] {symbol} -> {signal}")
+            await rm.execute_trade(symbol, signal)
+    except Exception as e:
+        print(f"[ERROR] manage_symbol {symbol}: {e}")
+        traceback.print_exc()
 
-async def main_loop():
-    # 建立 client / risk manager
-    client = BinanceClient(API_KEY, API_SECRET)  # 大部分 binance client 建構子是 (api_key, api_secret)
-    rm = RiskManager(client, EQUITY_RATIO)
+async def scanner():
+    client = BinanceClient(API_KEY, API_SECRET)
+    rm = RiskManager(client)
 
-    # 初次篩選（如果你想每次都用 filters.shortlist，可以在這裡呼叫）
-    filtered = await shortlist_symbols(client, max_candidates=len(SYMBOL_POOL))
-    if not filtered:
-        filtered = SYMBOL_POOL[:6]  # fallback
-    # main loop：每分鐘掃描一次
+    # initial shortlist
+    candidates = await shortlist(client, max_candidates=len(SYMBOL_POOL))
+    if not candidates:
+        candidates = SYMBOL_POOL[:6]
+
     while True:
-        await scan_once(client, rm, filtered)
-        await asyncio.sleep(60)
+        start = time.time()
+        # refresh shortlist periodically (optional)
+        try:
+            candidates = await shortlist(client, max_candidates=len(SYMBOL_POOL))
+        except Exception:
+            pass
+        tasks = []
+        for s in candidates:
+            tasks.append(manage_symbol(client, rm, s))
+        # run concurrently but protect each task
+        await asyncio.gather(*tasks, return_exceptions=True)
+        elapsed = time.time() - start
+        wait = max(1, SCAN_INTERVAL - elapsed)
+        await asyncio.sleep(wait)
 
 if __name__ == "__main__":
     try:
-        asyncio.run(main_loop())
+        asyncio.run(scanner())
     except KeyboardInterrupt:
         print("exiting")

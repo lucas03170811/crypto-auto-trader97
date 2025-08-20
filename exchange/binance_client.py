@@ -236,3 +236,15 @@ class BinanceClient:
         else:
             print(f"[ERROR] Failed to open SHORT {symbol}")
         return res
+    async def get_24h_stats(self, symbol: str) -> dict:
+        """Return 24hr ticker statistics for a symbol"""
+        try:
+            fn = getattr(self.client, "ticker_24hr", None)
+            if not fn:
+                return {}
+            res = await self._run_sync(fn, symbol=symbol)
+            if isinstance(res, dict):
+                return res
+        except Exception as e:
+            print(f"[ERROR] get_24h_stats {symbol}: {e}")
+        return {}

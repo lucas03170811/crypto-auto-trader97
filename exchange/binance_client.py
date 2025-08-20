@@ -1,101 +1,147 @@
-from decimal import Decimal, ROUND_FLOOR
-from typing import Dict, Any, Optional, Tuple
-import time
+# exchange/binance_client.py
+import asyncio
+from typing import Any, List, Optional, Dict
+import math
 
 from binance.um_futures import UMFutures
 
-
 class BinanceClient:
-    def __init__(self, api_key: str, api_secret: str, use_testnet: bool = False):
-        base_url = "https://testnet.binancefuture.com" if use_testnet else None
-        self.client = UMFutures(key=api_key, secret=api_secret, base_url=base_url)
-        self._filters: Dict[str, Dict[str, Decimal]] = {}
-        self._closed_symbols = set()
+    def __init__(self, api_key: str, api_secret: str, base_url: str = "https://fapi.binance.com", testnet: bool = False):
+        if testnet:
+            # testnet endpoint if required (user can change)
+            base_url = "https://testnet.binancefuture.com"
+        self.client = UMFutures(api_key, api_secret, base_url=base_url)
 
-    # --- 基本行情 ---
-    def ticker_price(self, symbol: str) -> float:
-        r = self.client.ticker_price(symbol=symbol)
-        return float(r["price"])
+    async def _run_sync(self, fn, *args, **kwargs):
+        return await asyncio.to_thread(lambda: fn(*args, **kwargs))
 
-    def klines(self, symbol: str, interval: str, limit: int):
-        return self.client.klines(symbol=symbol, interval=interval, limit=limit)
-
-    # --- 交易規格 ---
-    def _build_filters_cache(self):
-        info = self.client.exchange_info()
-        for s in info["symbols"]:
-            sym = s["symbol"]
-            lot = next((f for f in s["filters"] if f["filterType"] == "LOT_SIZE"), None)
-            tick = next((f for f in s["filters"] if f["filterType"] == "PRICE_FILTER"), None)
-            step = Decimal(lot["stepSize"]) if lot else Decimal("0.00000001")
-            tick_size = Decimal(tick["tickSize"]) if tick else Decimal("0.00000001")
-            self._filters[sym] = {"step": step, "tick": tick_size}
-
-    def get_filters(self, symbol: str) -> Dict[str, Decimal]:
-        if not self._filters:
-            self._build_filters_cache()
-        return self._filters.get(symbol, {"step": Decimal("0.00000001"), "tick": Decimal("0.00000001")})
-
-    # --- 槓桿 ---
-    def set_leverage(self, symbol: str, leverage: int) -> bool:
-        if symbol in self._closed_symbols:
-            return False
+    async def get_klines(self, symbol: str, interval: str = "5m", limit: int = 200):
         try:
-            self.client.change_leverage(symbol=symbol, leverage=leverage)
-            print(f"[資訊]{symbol} 槓桿已設定為 {leverage}x")
-            return True
+            raw = await self._run_sync(self.client.klines, symbol, interval, limit)
+            # raw: list of lists -> convert to pandas in strategy; here return raw (simpler)
+            return raw
         except Exception as e:
-            if "Symbol is closed" in str(e):
-                self._closed_symbols.add(symbol)
-            print(f"[WARN] 設定槓桿失敗 {symbol}： {e}")
-            return False
+            print(f"[ERROR] get_klines {symbol}: {e}")
+            return []
 
-    # --- 位置/PNL ---
-    def position(self, symbol: str) -> Dict[str, Any]:
-        # 回傳單一 symbol 的持倉資訊
-        data = self.client.position_risk(symbol=symbol)
-        if not data:
-            return {"positionAmt": 0.0, "entryPrice": 0.0, "unRealizedProfit": 0.0}
-        d = data[0]
-        return {
-            "positionAmt": float(d["positionAmt"]),
-            "entryPrice": float(d["entryPrice"]),
-            "unRealizedProfit": float(d["unRealizedProfit"]),
-        }
-
-    # --- 下單 ---
-    def _align_step(self, qty: float, step: Decimal) -> float:
-        if qty <= 0:
-            return 0.0
-        q = (Decimal(str(qty)) / step).to_integral_value(rounding=ROUND_FLOOR) * step
-        q = float(q)
-        if q == 0.0:
-            q = float(step)
-        return q
-
-    def market_order(self, symbol: str, side: str, qty: float, reduce_only: bool = False) -> Optional[Dict[str, Any]]:
+    async def get_price(self, symbol: str) -> float:
         try:
-            f = self.get_filters(symbol)
-            qty_aligned = self._align_step(qty, f["step"])
-            if qty_aligned <= 0:
-                print(f"[錯誤]{symbol} qty 對齊步進後為 0，取消下單（step={f['step']}）")
-                return None
-            r = self.client.new_order(
-                symbol=symbol,
-                side=side,
-                type="MARKET",
-                quantity=str(qty_aligned),
-                reduceOnly="true" if reduce_only else "false",
-            )
-            return r
+            res = await self._run_sync(self.client.ticker_price, symbol)
+            if isinstance(res, dict):
+                return float(res.get("price", 0.0))
+            # sometimes returns list
+            if isinstance(res, list) and res:
+                return float(res[0].get("price", 0.0))
         except Exception as e:
-            print(f"[ERROR] order {symbol}： {e}")
+            print(f"[ERROR] get_price {symbol}: {e}")
+        return 0.0
+
+    async def get_24h_stats(self, symbol: str) -> Optional[dict]:
+        for name in ("ticker_24hr_price_change", "ticker_24hr", "ticker_24hr_price_change_statistics", "ticker_24hr"):
+            try:
+                fn = getattr(self.client, name, None)
+                if fn:
+                    res = await self._run_sync(fn, symbol)
+                    return res
+            except Exception:
+                continue
+        return None
+
+    async def get_latest_funding_rate(self, symbol: str) -> Optional[float]:
+        try:
+            res = await self._run_sync(self.client.funding_rate, symbol=symbol, limit=1)
+            if isinstance(res, list) and res:
+                return float(res[0].get("fundingRate", 0.0))
+        except Exception as e:
+            # fallback
+            try:
+                res = await self._run_sync(self.client.funding_rate, symbol=symbol)
+                if isinstance(res, dict):
+                    return float(res.get("lastFundingRate", 0.0))
+            except Exception:
+                pass
+            print(f"[ERROR] get_latest_funding_rate {symbol}: {e}")
+        return None
+
+    async def get_symbol_info(self, symbol: str) -> Optional[dict]:
+        """Return symbol info (from exchangeInfo)."""
+        try:
+            info = await self._run_sync(self.client.exchange_info)
+            # exchange_info may return dict with 'symbols'
+            if isinstance(info, dict) and "symbols" in info:
+                for s in info["symbols"]:
+                    if s.get("symbol") == symbol:
+                        return s
+        except Exception as e:
+            print(f"[ERROR] get_symbol_info {symbol}: {e}")
+        return None
+
+    async def get_position(self, symbol: str) -> dict:
+        """
+        Return position dict with keys: positionAmt (float), entryPrice (float), unrealizedProfit (float)
+        """
+        try:
+            res = await self._run_sync(self.client.get_position_risk, symbol)
+            # some client returns list
+            if isinstance(res, list):
+                for p in res:
+                    if p.get("symbol") == symbol:
+                        return p
+            if isinstance(res, dict) and res.get("symbol") == symbol:
+                return res
+        except Exception as e:
+            print(f"[ERROR] Failed to get position for {symbol}: {e}")
+        return {}
+
+    async def get_equity(self) -> float:
+        try:
+            bal = await self._run_sync(self.client.balance)
+            if isinstance(bal, list):
+                for a in bal:
+                    if a.get("asset") == "USDT":
+                        return float(a.get("balance", 0.0))
+            if isinstance(bal, dict):
+                return float(bal.get("totalWalletBalance", 0.0))
+        except Exception as e:
+            print(f"[ERROR] Failed to get equity: {e}")
+        return 0.0
+
+    async def change_leverage(self, symbol: str, leverage: int):
+        """Try multiple method names (depends on SDK)."""
+        for fn_name in ("change_leverage", "set_leverage", "changeInitialLeverage", "leverage"):
+            fn = getattr(self.client, fn_name, None)
+            if not fn:
+                continue
+            try:
+                await self._run_sync(fn, symbol=symbol, leverage=leverage)
+                return True
+            except Exception as e:
+                # ignore and continue trying others
+                last_exc = e
+                continue
+        print(f"[WARN] failed to set leverage {symbol}: {locals().get('last_exc', None)}")
+        return False
+
+    async def new_order(self, symbol: str, side: str, quantity: float):
+        try:
+            return await self._run_sync(self.client.new_order, symbol=symbol, side=side, type="MARKET", quantity=quantity)
+        except Exception as e:
+            raise
+
+    async def open_long(self, symbol: str, qty: float):
+        try:
+            res = await self.new_order(symbol=symbol, side="BUY", quantity=qty)
+            print(f"[ORDER] Opened LONG {symbol} qty={qty} -> {res}")
+            return res
+        except Exception as e:
+            print(f"[ERROR] Failed to open LONG {symbol}: {e}")
             return None
 
-    def close_position(self, symbol: str):
-        pos = self.position(symbol)
-        amt = pos["positionAmt"]
-        if abs(amt) < 1e-12:
-            return
-        side = "SELL" if amt > 0 else "BUY"
-        self.market_order(symbol, side, abs(amt), reduce_only=True)
+    async def open_short(self, symbol: str, qty: float):
+        try:
+            res = await self.new_order(symbol=symbol, side="SELL", quantity=qty)
+            print(f"[ORDER] Opened SHORT {symbol} qty={qty} -> {res}")
+            return res
+        except Exception as e:
+            print(f"[ERROR] Failed to open SHORT {symbol}: {e}")
+            return None

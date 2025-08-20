@@ -1,7 +1,16 @@
+# === Core ===
+numpy==1.26.4
 pandas==2.2.2
-numpy==1.24.4
 pandas-ta==0.3.14b0
+
+# === Binance + HTTP ===
 binance-futures-connector==4.1.0
-python-dotenv==1.0.1
+requests==2.32.4
+websocket-client==1.8.0
 aiohttp==3.9.5
-SQLAlchemy==2.0.30
+
+# === Env ===
+python-dotenv==1.0.1
+
+# 若沒有用 DB，刪掉 SQLAlchemy；有用再加回
+# SQLAlchemy==2.0.30

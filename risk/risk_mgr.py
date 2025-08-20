@@ -1,46 +1,55 @@
-# risk/risk_mgr.py
-from decimal import Decimal, getcontext
-from typing import Optional
-import config
-from exchange.binance_client import BinanceClient
+import logging
+import time
+from binance.error import ClientError
 
-getcontext().prec = 28
+logger = logging.getLogger(__name__)
 
 class RiskManager:
-    def __init__(self, client: BinanceClient, equity_ratio: float = None):
+    def __init__(self, client, leverage, max_loss_pct, equity_ratio):
         self.client = client
-        self.equity_ratio = Decimal(str(equity_ratio if equity_ratio is not None else config.EQUITY_RATIO))
+        self.leverage = leverage
+        self.max_loss_pct = max_loss_pct
+        self.equity_ratio = equity_ratio
 
-    async def get_order_qty(self, symbol: str) -> Decimal:
-        price = await self.client.get_price(symbol)
-        if not price or price <= 0:
-            return Decimal("0")
+    def execute_trade(self, symbol, side, quantity, max_retries=3):
+        """
+        執行交易，如果資金不足會自動縮小數量重試
+        """
+        attempt = 0
+        q = quantity
 
-        equity = await self.client.get_equity()
-        if equity <= 0:
-            return Decimal("0")
+        while attempt < max_retries:
+            try:
+                logger.info(f"[RISK] Try order {symbol} side={side} qty={q}")
+                order = self.client.futures_create_order(
+                    symbol=symbol,
+                    side=side,
+                    type="MARKET",
+                    quantity=q
+                )
+                logger.info(f"[ORDER SUCCESS] {symbol} side={side} qty={q}")
+                return order
 
-        # 名目資金分配與槓桿
-        notional = Decimal(str(equity)) * self.equity_ratio
-        raw_qty = (notional * Decimal(str(config.LEVERAGE))) / Decimal(str(price))
+            except ClientError as e:
+                # Binance 錯誤代碼 -2019 => 保證金不足
+                if e.error_code == -2019:
+                    attempt += 1
+                    q = round(q * 0.5, 3)  # 每次縮小一半
+                    logger.warning(f"[RISK] Margin insufficient for {symbol}, retry with smaller qty={q}")
 
-        # 量化成交易所允許的步進
-        q = await self.client._quantize_qty(symbol, raw_qty)
-        return q
+                    if q <= 0:
+                        logger.error(f"[RISK] Order qty too small, aborting {symbol}")
+                        return None
 
-    async def execute_trade(self, symbol: str, side: str):
-        try:
-            qty = await self.get_order_qty(symbol)
-            if qty <= 0:
-                print(f"[RISK] qty too small: {symbol}")
+                    time.sleep(1)  # 稍等再試
+                    continue
+                else:
+                    logger.error(f"[RISK] execute_trade error {symbol}: {e}")
+                    return None
+
+            except Exception as e:
+                logger.error(f"[RISK] Unexpected error {symbol}: {e}")
                 return None
-            if side == "LONG":
-                return await self.client.open_long(symbol, qty)
-            elif side == "SHORT":
-                return await self.client.open_short(symbol, qty)
-            else:
-                print(f"[RISK] Unknown side {side}")
-                return None
-        except Exception as e:
-            print(f"[RISK] execute_trade error {symbol}: {e}")
-            return None
+
+        logger.error(f"[RISK] Failed to execute {symbol} after {max_retries} retries")
+        return None

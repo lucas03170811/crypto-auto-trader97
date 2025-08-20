@@ -1,20 +1,61 @@
+# strategies/revert.py
 import pandas as pd
-import pandas_ta as ta
-from config import RSI_LEN, BB_LEN, BB_STD, RSI_BUY, RSI_SELL
+import numpy as np
+from typing import Optional
+import config
 
-def generate_revert_signal(df: pd.DataFrame):
-    """
-    反轉策略：RSI + 布林
-    回傳: "BUY" / "SELL" / None
-    """
-    df["rsi"] = ta.rsi(df["close"], length=RSI_LEN)
-    bb = ta.bbands(df["close"], length=BB_LEN, std=BB_STD)
-    df["bbl"] = bb[f"BBL_{BB_LEN}_{BB_STD}"]
-    df["bbu"] = bb[f"BBU_{BB_LEN}_{BB_STD}"]
+def klines_to_df(klines):
+    cols = ["open_time","open","high","low","close","volume","close_time",
+            "quote_asset_volume","num_trades","taker_buy_base","taker_buy_quote","ignore"]
+    try:
+        df = pd.DataFrame(klines, columns=cols)
+        df["open"] = df["open"].astype(float)
+        df["high"] = df["high"].astype(float)
+        df["low"] = df["low"].astype(float)
+        df["close"] = df["close"].astype(float)
+        df["volume"] = df["volume"].astype(float)
+        return df
+    except Exception:
+        arr = []
+        for k in klines:
+            arr.append({"open": float(k[1]), "high": float(k[2]), "low": float(k[3]), "close": float(k[4]), "volume": float(k[5])})
+        return pd.DataFrame(arr)
 
-    last = df.iloc[-1]
-    if last["rsi"] < RSI_BUY and last["close"] < last["bbl"]:
-        return "BUY"
-    if last["rsi"] > RSI_SELL and last["close"] > last["bbu"]:
-        return "SELL"
-    return None
+def rsi(series: pd.Series, period: int = 14) -> pd.Series:
+    delta = series.diff()
+    up = delta.clip(lower=0)
+    down = -1 * delta.clip(upper=0)
+    ma_up = up.ewm(alpha=1/period, adjust=False).mean()
+    ma_down = down.ewm(alpha=1/period, adjust=False).mean()
+    rs = ma_up / (ma_down + 1e-12)
+    return 100 - (100 / (1 + rs))
+
+async def generate_revert_signal(symbol: str, client=None) -> Optional[str]:
+    try:
+        if client:
+            klines = await client.get_klines(symbol, interval=config.KLINE_INTERVAL, limit=config.KLINE_LIMIT)
+        else:
+            return None
+        df = klines_to_df(klines)
+        if df is None or len(df) < config.BOLL_WINDOW + 5:
+            return None
+
+        close = df["close"]
+        r = rsi(close, period=config.REVERT_RSI_PERIOD)
+        ma = close.rolling(window=config.BOLL_WINDOW).mean()
+        std = close.rolling(window=config.BOLL_WINDOW).std()
+        upper = ma + config.BOLL_STDDEV * std
+        lower = ma - config.BOLL_STDDEV * std
+
+        last_close = close.iloc[-1]
+        last_rsi = r.iloc[-1] if len(r) > 0 else None
+
+        # loose revert entries:
+        if last_close <= lower.iloc[-1] and last_rsi is not None and last_rsi <= config.REVERT_RSI_OVERSOLD:
+            return "LONG"
+        if last_close >= upper.iloc[-1] and last_rsi is not None and last_rsi >= config.REVERT_RSI_OVERBOUGHT:
+            return "SHORT"
+        return None
+    except Exception as e:
+        print(f"[STRATEGY:revert] error {symbol}: {e}")
+        return None

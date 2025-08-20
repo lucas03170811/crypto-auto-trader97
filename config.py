@@ -1,58 +1,67 @@
 import os
-import sys
 
-def _truthy(v: str) -> bool:
-    if v is None:
-        return False
-    return v.strip().lower() in ("1", "true", "yes", "on")
+# ===== API 金鑰（Railway 變數名稱）=====
+API_KEY = os.getenv("BINANCE_API_KEY", "")
+API_SECRET = os.getenv("BINANCE_API_SECRET", "")
 
-print("===== [CONFIG DEBUG] 載入設定檔 =====")
+# ===== 交易環境 =====
+USE_TESTNET = False  # True=測試網, False=正式網
 
-# 支援兩組環境變數名稱
-BINANCE_API_KEY = (
-    os.getenv("BINANCE_API_KEY")
-    or os.getenv("API_KEY")
-)
-BINANCE_API_SECRET = (
-    os.getenv("BINANCE_API_SECRET")
-    or os.getenv("API_SECRET")
-)
+# ===== 掃描節奏（秒）=====
+SCAN_INTERVAL_SEC = 60  # ← 每 60 秒掃描一次
 
-TESTNET = _truthy(os.getenv("TESTNET") or os.getenv("BINANCE_TESTNET", "0"))
+# ===== 槓桿 =====
+LEVERAGE = 10  # ← 全部幣種套用（若幣種關閉，會自動跳過）
 
-if not BINANCE_API_KEY or not BINANCE_API_SECRET:
-    print("API_KEY： ❌ 未讀取")
-    print("API_SECRET： ❌ 未讀取")
-    print("[ERROR] 請在 Railway 設定環境變數：BINANCE_API_KEY / BINANCE_API_SECRET（或 API_KEY / API_SECRET）")
-    sys.exit(1)
-
-print(f"API_KEY： ✅ 已讀取")
-print(f"API_SECRET： ✅ 已讀取")
-
-# 槓桿（若策略/下單前要動態設定，可在 main 內逐幣種呼叫）
-LEVERAGE = int(os.getenv("LEVERAGE", "30"))
-
-# 交易幣種池
-SYMBOL_POOL = [
-    "BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT", "ADAUSDT",
-    "DOGEUSDT", "LINKUSDT", "AVAXUSDT", "1000BONKUSDT",
-    "SUIUSDT", "SEIUSDT", "1000PEPEUSDT", 
+# ===== 交易清單 =====
+SYMBOLS = [
+    "BTCUSDT","ETHUSDT","SOLUSDT","XRPUSDT","ADAUSDT","DOGEUSDT",
+    "LINKUSDT","AVAXUSDT","MATICUSDT","SUIUSDT","SEIUSDT",
+    "1000PEPEUSDT","1000BONKUSDT",
 ]
-print(f"交易幣種數量: {len(SYMBOL_POOL)}")
 
-# 預設每筆「期望名目」(USD)；實際會自動「至少滿足 minNotional」
-# 小幣對預設 6U；大幣對讓風控邏輯自動跳過（如果餘額不足）
-DESIRED_TRADE_USD_DEFAULT = float(os.getenv("DESIRED_TRADE_USD_DEFAULT", "6"))
+# ===== 策略參數 =====
+# 趨勢（EMA + MACD）
+EMA_FAST = 12
+EMA_SLOW = 26
+MACD_SIGNAL = 9
 
-# 若交易所查詢 minNotional 失敗，使用這個後備表
-# （BTC/ETH/LINK 在 Binance USDⓈ-M Futures 上常見 minNotional 分別為 100 / 20 / 20）
-FALLBACK_MIN_NOTIONAL = {
+# 反轉（RSI + 布林）
+RSI_LEN = 14
+BB_LEN = 20
+BB_STD = 2.0
+RSI_BUY = 30
+RSI_SELL = 70
+
+# ===== 風控／加碼參數 =====
+# 每個幣最小目標名目金額（USDT），名目不足會自動補到這個值
+MIN_NOTIONAL = {
     "BTCUSDT": 100.0,
     "ETHUSDT": 20.0,
+    "SOLUSDT": 10.0,
+    "XRPUSDT": 10.0,
+    "ADAUSDT": 10.0,
+    "DOGEUSDT": 5.0,
     "LINKUSDT": 20.0,
+    "AVAXUSDT": 20.0,
+    "MATICUSDT": 10.0,
+    "SUIUSDT": 5.0,
+    "SEIUSDT": 5.0,
+    "1000PEPEUSDT": 5.0,
+    "1000BONKUSDT": 5.0,
 }
-FALLBACK_MIN_NOTIONAL_DEFAULT = 5.0
+DEFAULT_MIN_NOTIONAL = 5.0  # 找不到幣時的 fallback
 
-DEBUG_MODE = _truthy(os.getenv("DEBUG_MODE", "1"))
+# 加碼（同向）規則
+ADD_TRIGGER_PROFIT = 0.40   # 獲利 > 40% 加碼
+BREAKOUT_LOOKBACK = 20      # 突破最近 N 根高/低加碼
+MAX_PYRAMIDS = 8            # 最多加碼 8 次
+ADD_SIZE_MULTIPLIER = 1.0   # 每次加碼量 = 基礎下單量 * 這個倍數
 
-print("======================================")
+# 追蹤停利／停損
+TRAIL_GIVEBACK = 0.20       # 從峰值利潤回落 20% => 全平
+STOP_LOSS_PCT = -0.30       # 直接虧損 -30% => 全平
+
+# K 線拉取
+KLINE_INTERVAL = "1m"       # ← 每分鐘策略
+KLINE_LIMIT = 200

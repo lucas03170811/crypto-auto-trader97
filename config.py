@@ -30,7 +30,7 @@ print(f"交易幣種數量: {len(SYMBOL_POOL)}")
 
 # 風控 & 下單設定
 EQUITY_RATIO = float(os.getenv("EQUITY_RATIO", "0.05"))   # 每次下單使用總資產比例 (預設 5%)
-BASE_ORDER_USD = float(os.getenv("BASE_ORDER_USD", "5.0"))  # 當 equity 太小時，補足的最小名目 (USD)
+BASE_ORDER_USD = float(os.getenv("BASE_ORDER_USD", "10"))  # 當 equity 太小時，補足的最小名目 (USD)
 MIN_NOTIONAL_USD = float(os.getenv("MIN_NOTIONAL_USD", "5.0"))  # 交易所要求最小名目 (常見 5)
 LEVERAGE = int(os.getenv("LEVERAGE", "30"))  # 設定槓桿倍數（合約）
 MAX_PYRAMID = int(os.getenv("MAX_PYRAMID", "8"))  # 最多加碼次數

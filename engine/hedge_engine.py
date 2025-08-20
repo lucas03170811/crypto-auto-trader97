@@ -1,6 +1,6 @@
 # engine/hedge_engine.py
 import asyncio
-from strategies.filter import filter_symbols
+from strategies.filter import filter_symbols  # 原本就存在的輕量版篩選
 from strategies.trend import generate_trend_signal, should_pyramid
 from strategies.revert import generate_revert_signal
 
@@ -15,17 +15,16 @@ class HedgeEngine:
         print(f"[Engine] Filtered: {symbols}")
 
         for symbol in symbols:
-            df = await self.client.get_klines(symbol)
-            if df is None or len(df) < 30:
-                print(f"[SKIP] No valid data for {symbol}")
-                continue
-
-            trend_sig = generate_trend_signal(df)
-            revert_sig = generate_revert_signal(df)
-            signal = trend_sig or revert_sig
-
-            if signal:
-                print(f"[SIGNAL] {symbol} -> {signal}")
-                await self.risk_mgr.execute_trade(symbol, signal)
-            else:
-                print(f"[NO SIGNAL] {symbol} no entry")
+            try:
+                trend_sig = await generate_trend_signal(self.client, symbol)
+                revert_sig = await generate_revert_signal(self.client, symbol)
+                signal = trend_sig or revert_sig
+                if signal:
+                    print(f"[SIGNAL] {symbol} -> {signal}")
+                    await self.risk_mgr.execute_trade(symbol, signal)
+                    if await should_pyramid(self.client, symbol, side_long=(signal=="LONG")):
+                        await self.risk_mgr.execute_trade(symbol, signal)
+                else:
+                    print(f"[NO SIGNAL] {symbol} no entry")
+            except Exception as e:
+                print(f"[Engine] error {symbol}: {e}")

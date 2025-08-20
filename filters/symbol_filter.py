@@ -7,8 +7,8 @@ import config
 async def _metrics_for(client, symbol: str):
     # funding rate
     try:
-        prem = await client._run(client.client.premium_index, symbol)
-        funding = Decimal(str(prem.get("lastFundingRate", "0")))
+        prem = await client.get_premium_index(symbol)
+        funding = Decimal(str(prem.get("lastFundingRate", "0"))) if prem else Decimal("0")
     except Exception:
         funding = Decimal("0")
     # 24h quote volume
@@ -21,7 +21,7 @@ async def _metrics_for(client, symbol: str):
 
 async def shortlist(client, max_candidates: int = 8) -> List[str]:
     """
-    維持你原本的邏輯：以 funding rate & 24h quote volume 過濾，
+    以 funding rate & 24h quote volume 過濾，
     若不達標則以成交量排序回退。
     """
     tasks = [ _metrics_for(client, s) for s in config.SYMBOL_POOL ]

@@ -20,8 +20,7 @@ SCAN_INTERVAL = int(os.getenv("SCAN_INTERVAL", "60"))
 # 交易池（保留你之前部署時觀察到的幾個幣對）
 SYMBOL_POOL: List[str] = [
     "BTCUSDT","ETHUSDT","SOLUSDT","XRPUSDT","ADAUSDT",
-    "DOGEUSDT","LINKUSDT","AVAXUSDT","1000BONKUSDT",
-    "SUIUSDT","SEIUSDT","1000PEPEUSDT"
+    "DOGEUSDT","1000PEPEUSDT"
 ]
 
 # 風控參數（依你原本的命名）
